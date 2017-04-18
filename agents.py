@@ -1,6 +1,6 @@
 import numpy as np
 import tensorflow as tf
-from approximators import fullyConnected, copyScopeVars, getScopeParameters
+from approximators import fullyConnected, copyScopeVars, getScopeParameters, entropyLoss
 from memory import Memory, GeneralMemory
 
 
@@ -110,10 +110,12 @@ class DoubleDQN(DQN):
             batch)
         action_value = session.run(
             self.action_value, {self.input: states})
+        next_action = np.argmax(action_value,axis=1)
         next_state_value = session.run(
             self.target_action_value, {self.input: next_states})
-        observed_value = rewards + discount * \
-            np.max(next_state_value, 1, keepdims=True)
+        observed_value = rewards + np.expand_dims(discount * next_state_value[np.arange(batch),next_action],-1)
+        # print(observed_value.shape,np.expand_dims(discount * next_state_value[np.arange(batch),next_action],-1).shape,rewards.shape)
+        # raise
         observed_value[terminals] = rewards[terminals] / (1 - discount)
         action_value[np.arange(batch), actions] = observed_value[:, 0]
 
@@ -315,25 +317,29 @@ class DDPG(object):
 
 
 class ActorCritic(object):
-    def __init__(self, state_dim, action_dim, memory_size, tau=.01):
+    def __init__(self, state_dim, action_dim, memory_size, shared_net=[]):
         self.action_dim = action_dim
-        self.tau = tau
         self.state = tf.placeholder(tf.float32, (None, state_dim))
+        self.shared = self.state
+        with tf.variable_scope("shared"):
+            for i, layer in enumerate(shared_net):
+                self.shared = fullyConnected(
+                    "layer_%i" % i, self.shared, layer, tf.nn.relu)
         self.action_ph = tf.placeholder(tf.float32, (None, action_dim))
         self.grad_ph = tf.placeholder(tf.float32, (None, 1))
         self.value_ph = tf.placeholder(tf.float32, (None, 1))
         self.memory = Memory(memory_size, state_dim, 0)
 
-    def initializeActor(self, layers=[400, 300], optimizer=None):
-        optimizer = optimizer or tf.train.AdamOptimizer(.01)
+    def initializeActor(self, layers=[400, 300], optimizer=None, entropy=0.0):
+        optimizer = optimizer or tf.train.AdamOptimizer(.0001)
 
         def _make():
-            net = self.state
-            for layer in layers:
+            net = self.shared
+            for i, layer in enumerate(layers):
                 net = fullyConnected("layer_%i" %
-                                     layer, net, layer, tf.nn.relu,.01)
+                                     i, net, layer, tf.nn.relu, .01)
             actions = fullyConnected(
-                "actor_output", net, self.action_dim, tf.nn.softmax,.01)
+                "actor_output", net, self.action_dim, tf.nn.softmax, .01)
             return actions
 
         with tf.variable_scope("actor"):
@@ -348,28 +354,30 @@ class ActorCritic(object):
         # action_probibility = tf.slice(self.actor,self.action_ph,[[1]])
 
         action_probibility = tf.reduce_sum(
-            tf.multiply(self.action_ph, self.actor), axis=[1],keep_dims=True)
-        self.single_loss = tf.log(action_probibility+1e-8) * self.grad_ph
-        self.loss = -tf.reduce_sum(self.single_loss)
+            tf.multiply(self.action_ph, self.actor), axis=[1], keep_dims=True)
+        self.single_loss = tf.log(action_probibility + 1e-8) * self.grad_ph
+        self.actor_loss = -tf.reduce_sum(self.single_loss)
+        if entropy != 0.0:
+            self.actor_loss -= entropyLoss(self.actor) * entropy
 
-
-        self.train_actor = optimizer.minimize(self.loss)
+        self.train_actor = optimizer.minimize(self.actor_loss)
 
     def initializeCritic(self, layers=[400, 300], optimizer=None):
-        optimizer = optimizer or tf.train.AdamOptimizer(.1)
+        optimizer = optimizer or tf.train.AdamOptimizer(.001)
 
         def _make():
-            net = self.state
-            for layer in layers:
+            net = self.shared
+            for i, layer in enumerate(layers):
                 net = fullyConnected("layer_%i" %
-                                     layer, net, layer, tf.nn.relu, .1)
-            return fullyConnected("critic_output", net, 1, initializer=.1)
+                                     i, net, layer, tf.nn.relu, .1)
+            return fullyConnected("critic_output", net, 1, initializer=.0001)
 
         with tf.variable_scope("critic"):
             self.critic = _make()
 
-        self._loss = tf.reduce_mean(tf.square(self.value_ph - self.critic))
-        self.train_critic = optimizer.minimize(self._loss)
+        self.critic_loss = tf.reduce_mean(
+            tf.square(self.value_ph - self.critic))
+        self.train_critic = optimizer.minimize(self.critic_loss)
 
     def train(self, session, batch_size, discount=.97):
         states, actions, rewards, next_states, terminals = self.memory.sample(
@@ -383,17 +391,11 @@ class ActorCritic(object):
         actions_onehot = np.zeros((batch_size, self.action_dim), float)
         actions_onehot[np.arange(batch_size), actions] = 1
         # print(actions,actions_onehot)
-        l, _ = session.run([self._loss, self.train_critic], {
+        l, _ = session.run([self.critic_loss, self.train_critic], {
                            self.value_ph: observed_value, self.state: states})
-        _, actor_l = session.run([self.train_actor, self.loss], {
+        _, actor_l = session.run([self.train_actor, self.actor_loss], {
             self.state: states, self.action_ph: actions_onehot, self.grad_ph: observed_value - state_value})
-        if actor_l!=actor_l:
-            print(session.run(self.single_loss, {
-            self.state: states, self.action_ph: actions_onehot, self.grad_ph: observed_value - state_value}))
-            print("this", actor_l, states, actions, observed_value -
-                  state_value, observed_value, state_value, l)
-            print(session.run(self.actor, {self.state: states}))
-            raise
+
         return l
 
     def policy(self, session, state):
