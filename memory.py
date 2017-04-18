@@ -7,7 +7,7 @@ class Memory(object):
         if type(state_dims) == int:
             state_dims = [state_dims]
         self.states = empty([size] + state_dims, dtype=float)
-        
+
         if action_dims == 0:
             self.actions = empty(size, dtype=int)
         else:
@@ -155,13 +155,64 @@ class Buffer(object):
         return str(self.buffer)
 
 
-class PrioritizedMemory(Memory):
-    pass
+class GeneralMemory(object):
+    def __init__(self, size, dimensions):
+        self.memory = []
+        for dim in dimensions:
+            if dim == 0:
+                self.memory.append(empty((size,), dtype=int))
+            else:
+                self.memory.append(empty((size, dim), dtype=float))
+
+        self.pointer = 0
+        self.length = size
+        self.add = self._fill
+        self.sample = self._sampleFromHalfFull
+        self.filled = False
+
+    def setSeed(self, value):
+        seed(value)
+
+    def isFull(self):
+        return self.filled
+
+    def count(self):
+        if self.filled:
+            return self.length
+        else:
+            return self.pointer
+
+    def _fill(self, inputs):
+        i = self.pointer
+        for b, m in enumerate(self.memory):
+            m[i] = inputs[b]
+        self.pointer = (i + 1)
+        if (i + 1) == self.length:
+            self._switch()
+
+    def _switch(self):
+        self.pointer = 0
+        self.filled = True
+        self.add = self._update
+        self.sample = self._sampleFromFull
+
+    def _update(self, inputs):
+        i = self.pointer
+        for b, m in enumerate(self.memory):
+            m[i] = inputs[b]
+        self.pointer = (i + 1) % self.length
+
+    def _sampleFromHalfFull(self, batch_size):
+        index = randint(self.pointer, size=(batch_size))
+        return [m[index] for m in self.memory]
+
+    def _sampleFromFull(self, batch_size):
+        index = randint(self.length, size=(batch_size))
+        return [m[index] for m in self.memory]
+
 
 if __name__ == "__main__":
-    m = Buffer(10, (2,))
-    for _ in range(10):
-        m.add([randint(10), randint(10)])
+    m = GeneralMemory(10, [1, 2, 0])
+    m.add([[3], [45, 6], 1.5])
 
-    print(m)
-    print(m[:2])
+    print(m.sample(5))

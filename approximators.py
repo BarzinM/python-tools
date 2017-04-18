@@ -5,7 +5,7 @@ from tensorflow.contrib.framework import get_or_create_global_step
 
 
 # def fullyConnected(input_layer, output_dims, activation=None, initializer=xavier_initializer):
-#     state_dims = input_layer.get_shape()[1]
+#     state_dims = input_layer.get_shape()[-1]
 #     weight_1 = tf.get_variable("w", shape=(
 #         state_dims, output_dims), dtype=tf.float32, initializer=initializer())
 #     bias_1 = tf.get_variable("b", shape=(output_dims),
@@ -17,25 +17,36 @@ from tensorflow.contrib.framework import get_or_create_global_step
 
 
 def fullyConnected(name, input_layer, output_dims, activation=None, initializer=None):
-    state_dims = input_layer.get_shape()[1]
-    shape = [state_dims, output_dims]
+    # state_dims = input_layer.get_shape()[1]
+    # shape = [state_dims, output_dims]
 
     if initializer is None or initializer == 'xavier':
         initializer = xavier_initializer()
     elif type(initializer) in [int, float]:
-        coef = initializer
-        initializer = lambda shape, dtype, partition_info: ones(
-            shape, float) * coef
+        initializer = tf.random_uniform_initializer(
+            minval=-initializer, maxval=initializer)
+        # coef = initializer
+        # initializer = lambda shape, dtype, partition_info: ones(
+        #     shape, float) * coef
         # initializer = tf.constant_initializer(initializer)
 
-    weight = tf.get_variable(name + "_w", shape=shape,
-                             dtype=tf.float32, initializer=initializer)
     bias = tf.get_variable(
-        name + "_b", shape=shape[1:], dtype=tf.float32, initializer=initializer)
+        name + "_b", shape=output_dims, dtype=tf.float32, initializer=initializer)
 
-    next_layer = tf.add(tf.matmul(input_layer, weight), bias, name=name)
+    if type(input_layer) in [list, tuple]:
+        weights = [tf.get_variable("%s_w_%i" % (name, i), shape=[l.get_shape()[-1], output_dims],
+                                   dtype=tf.float32, initializer=initializer) for i, l in enumerate(input_layer)]
+        mults = [tf.matmul(l, w) for l, w in zip(input_layer, weights)]
+        next_layer = sum(mults,bias)
+    else:
+        input_dims = input_layer.get_shape()[-1]
+        weight = tf.get_variable(name + "_w", shape=[input_dims, output_dims],
+                                 dtype=tf.float32, initializer=initializer)
+        next_layer = tf.add(tf.matmul(input_layer, weight), bias)
+
     if activation:
-        next_layer = activation(next_layer, name=name)
+        next_layer = activation(next_layer, name='activated_' + name)
+
     return next_layer
 
 

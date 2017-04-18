@@ -2,7 +2,7 @@ import tensorflow as tf
 from approximators import fullyConnected
 
 
-def imaginationNN(inputs, state_dim, action_dim):
+def imaginationNN(inputs, state_dim):
     state = fullyConnected("state_prediction", inputs, state_dim)
     reward = fullyConnected("reward_prediction", inputs, 1)
     termination = fullyConnected(
