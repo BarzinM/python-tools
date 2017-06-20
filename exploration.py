@@ -11,10 +11,8 @@ class OUExploration(object):
         self.reset()
 
     def noise(self):
-        x = self.state
-        change = self.theta * (self.mu - x) + \
-            self.sigma * randn(len(x))
-        self.state = x + change
+        self.state += self.theta * (self.mu - self.state) + \
+            self.sigma * randn(len(self.state))
         return self.state
 
     def reset(self):

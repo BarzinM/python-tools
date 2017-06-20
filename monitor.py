@@ -6,25 +6,34 @@ import __main__
 
 
 class Monitor(object):
-    def __init__(self, path=None, session=None):
+    def __init__(self, path=None, sub='', session=None, verbose=True):
         if path is None:
             path = 'results/' + __main__.__file__[:-3]
+        path = path + '/' + sub
         if os.path.isdir(path):
             shutil.rmtree(path)
+        if verbose:
+            print("Saving monitor files to", path)
         if session is None:
             self.writer = tf.summary.FileWriter(path)
         else:
-            self.writer = tf.summary.FileWriter(path, self.session.graph)
+            self.writer = tf.summary.FileWriter(path, session.graph)
         self.variables = {}
+        self.strings = []
         self.iteration = 0
 
+    def merge(self, var):
+        self.variables[var] = 0.
+        return var
+
     def addVar(self, name, initial=0.):
-        self.var = tf.Variable(initial)
-        tf.summary.scalar(name, self.var)
-        self.variables[self.var] = initial
-        return self.var
+        var = tf.Variable(initial, name=name)
+        self.strings.append(tf.summary.scalar(name, var))
+        self.variables[var] = initial
+        return var
 
     def setup(self):
+        # self.op = tf.summary.merge(self.strings)
         self.op = tf.summary.merge_all()
 
     def set(self, var, value):

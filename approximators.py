@@ -1,51 +1,39 @@
 import tensorflow as tf
-from tensorflow.contrib.layers import xavier_initializer, fully_connected
+from tensorflow.contrib.layers import xavier_initializer
 from numpy import ones
 from tensorflow.contrib.framework import get_or_create_global_step
+import numpy as np
 
 
-# def fullyConnected(input_layer, output_dims, activation=None, initializer=xavier_initializer):
-#     state_dims = input_layer.get_shape()[-1]
-#     weight_1 = tf.get_variable("w", shape=(
-#         state_dims, output_dims), dtype=tf.float32, initializer=initializer())
-#     bias_1 = tf.get_variable("b", shape=(output_dims),
-#                              dtype=tf.float32, initializer=initializer())
-#     next_layer = tf.matmul(input_layer, weight_1) + bias_1
-#     if activation:
-#         next_layer = activation(next_layer)
-#     return next_layer
-
-
-def fullyConnected(name, input_layer, output_dims, activation=None, initializer=None):
-    # state_dims = input_layer.get_shape()[1]
-    # shape = [state_dims, output_dims]
+def fullyConnected(name, input_layer, output_dims, activation=None, initializer=None, bias=True):
 
     if initializer is None or initializer == 'xavier':
         initializer = xavier_initializer()
     elif type(initializer) in [int, float]:
         initializer = tf.random_uniform_initializer(
             minval=-initializer, maxval=initializer)
-        # coef = initializer
-        # initializer = lambda shape, dtype, partition_info: ones(
-        #     shape, float) * coef
-        # initializer = tf.constant_initializer(initializer)
-
-    bias = tf.get_variable(
-        name + "_b", shape=output_dims, dtype=tf.float32, initializer=initializer)
 
     if type(input_layer) in [list, tuple]:
-        weights = [tf.get_variable("%s_w_%i" % (name, i), shape=[l.get_shape()[-1], output_dims],
+        print([[l.get_shape().as_list()[-1], output_dims]
+               for i, l in enumerate(input_layer)])
+        weights = [tf.get_variable("%s_w_%i" % (name, i), shape=[l.get_shape().as_list()[-1], output_dims],
                                    dtype=tf.float32, initializer=initializer) for i, l in enumerate(input_layer)]
         mults = [tf.matmul(l, w) for l, w in zip(input_layer, weights)]
-        next_layer = sum(mults,bias)
+        next_layer = sum(mults)
+
     else:
-        input_dims = input_layer.get_shape()[-1]
-        weight = tf.get_variable(name + "_w", shape=[input_dims, output_dims],
+        input_dims = input_layer.get_shape().as_list()[1:]
+        weight = tf.get_variable(name + "_w", shape=[*input_dims, output_dims],
                                  dtype=tf.float32, initializer=initializer)
-        next_layer = tf.add(tf.matmul(input_layer, weight), bias)
+        next_layer = tf.matmul(input_layer, weight)
+
+    if bias:
+        bias = tf.get_variable(
+            name + "_b", shape=output_dims, dtype=tf.float32, initializer=initializer)
+        next_layer = tf.add(next_layer, bias)
 
     if activation:
-        next_layer = activation(next_layer, name='activated_' + name)
+        next_layer = activation(next_layer, name=name + "_activated")
 
     return next_layer
 
@@ -141,6 +129,22 @@ class Approximator(object):
             else:
                 return optimizer.minimize(self._loss, global_step=get_or_create_global_step())
 
+
+class RandomNetwork(object):
+    def __init__(self, dimensions):
+        self.noise = tf.placeholder(tf.float32, (None,1))
+        self.output = tf.placeholder(tf.float32, (None, dimensions))
+        self.predict = fullyConnected("nonlinearities", self.noise, dimensions)
+        self.loss = tf.reduce_mean(tf.square(self.output - self.predict))
+        optimizer = tf.train.AdamOptimizer(.001)
+        self.train_op = optimizer.minimize(self.loss)
+
+    def train(self, session, data):
+        noise = np.random.rand(data.shape[0],1)
+        return session.run([self.loss,self.train_op],{
+            self.output:data,
+            self.noise:noise
+            })[0]
 
 class Policy(Approximator):
     def __init__(self, input_layer, action_dims):

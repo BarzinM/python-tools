@@ -11,6 +11,9 @@ class RunningAverage(object):
         self.avg = self.avg * (1 - self.tau) + value * self.tau
         return self.avg
 
+    def get(self):
+        return self.avg
+
 
 class RunningVariance(object):
     def __init__(self, tau, initial_avg=0., initial_var=0.):
