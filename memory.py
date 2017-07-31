@@ -68,12 +68,15 @@ class GeneralMemory(object):
         self.filled = False
         self.added = 0
 
-    def setSeed(self, value):
+    @property
+    def seed(self, value):
         seed(value)
 
+    @property
     def isFull(self):
         return self.filled
 
+    @property
     def count(self):
         if self.filled:
             return self.max_length
@@ -197,6 +200,7 @@ if __name__ == "__main__":
 
     def healthy_copy():
         m = GeneralMemory(5, 1)
+        m.count()
         m.addBatch(np.reshape(np.arange(5), (5, 1)))
         n = GeneralMemory(5, 1)
         n.add([0])

@@ -86,16 +86,21 @@ def getScopeParameters(scope_name):
 
 
 def copyScopeVars(from_scope, to_scope, tau=None):
+    if tf.get_variable_scope().name:
+        scope = tf.get_variable_scope().name + '/'
+    else:
+        scope = ''
+
     from_list = tf.get_collection(
-        tf.GraphKeys.TRAINABLE_VARIABLES, scope=from_scope)
+        tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + from_scope)
     target_list = tf.get_collection(
-        tf.GraphKeys.TRAINABLE_VARIABLES, scope=to_scope)
+        tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + to_scope)
 
     from_list = sorted(from_list, key=lambda v: v.name)
     target_list = sorted(target_list, key=lambda v: v.name)
 
-    assert len(from_list) > 0
     assert len(from_list) == len(target_list)
+    assert len(target_list) > 0
 
     operations = []
     for i in range(len(from_list)):
@@ -132,7 +137,7 @@ class Approximator(object):
 
 class RandomNetwork(object):
     def __init__(self, dimensions):
-        self.noise = tf.placeholder(tf.float32, (None,1))
+        self.noise = tf.placeholder(tf.float32, (None, 1))
         self.output = tf.placeholder(tf.float32, (None, dimensions))
         self.predict = fullyConnected("nonlinearities", self.noise, dimensions)
         self.loss = tf.reduce_mean(tf.square(self.output - self.predict))
@@ -140,11 +145,12 @@ class RandomNetwork(object):
         self.train_op = optimizer.minimize(self.loss)
 
     def train(self, session, data):
-        noise = np.random.rand(data.shape[0],1)
-        return session.run([self.loss,self.train_op],{
-            self.output:data,
-            self.noise:noise
-            })[0]
+        noise = np.random.rand(data.shape[0], 1)
+        return session.run([self.loss, self.train_op], {
+            self.output: data,
+            self.noise: noise
+        })[0]
+
 
 class Policy(Approximator):
     def __init__(self, input_layer, action_dims):

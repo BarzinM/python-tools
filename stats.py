@@ -1,5 +1,7 @@
 from math import sqrt
 from collections import deque
+from numpy import dot
+from numpy.linalg import norm
 
 
 class RunningAverage(object):
@@ -90,3 +92,9 @@ class Normality(object):
                 abs(sum(self.dist[:3]) / total - .9973) < self.tol:
             return True
         return False
+
+
+def cosineSimilarity(a, b):
+    return dot(a, b) / (norm(a) * norm(b))
+
+

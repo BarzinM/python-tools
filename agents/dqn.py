@@ -47,7 +47,7 @@ class DQN(object):
             self.target_action_value, {self.state: next_states})
         observed_value = rewards + discount * \
             np.max(next_state_value, 1, keepdims=True)
-        observed_value[terminals] = rewards[terminals] / (1 - discount)
+        observed_value[terminals] = rewards[terminals]
 
         _, l = session.run([self.train_op, self._loss], {
             self.state: states, self.action_ph: actions, self.action_value_ph: observed_value[:, 0]})
@@ -105,7 +105,7 @@ class DoubleDQN(DQN):
         observed_value = rewards + \
             np.expand_dims(
                 discount * next_state_value[np.arange(batch), next_action], -1)
-        observed_value[terminals] = rewards[terminals] / (1 - discount)
+        observed_value[terminals] = rewards[terminals]
         action_value[np.arange(batch), actions] = observed_value[:, 0]
 
         _, l = session.run([self.train_op, self._loss], {
@@ -169,7 +169,7 @@ class ExpDQN(object):
             self.target_action_value, {self.state: next_states})
         observed_value = rewards + discount * \
             np.max(next_state_value, 1, keepdims=True)
-        observed_value[terminals] = rewards[terminals] / (1 - discount)
+        observed_value[terminals] = rewards[terminals]
         return states, actions, observed_value[:, 0]
 
     def train(self, session, batch=None, discount=.97, p=False):
@@ -283,7 +283,7 @@ class ExpDQN2(object):
             self.target_action_value, {self.state: next_states})
         observed_value = rewards + discount * \
             np.max(next_state_value, 1, keepdims=True)
-        observed_value[terminals] = rewards[terminals] / (1 - discount)
+        observed_value[terminals] = rewards[terminals]
 
         try:
             states2, actions2, rewards2, next_states2, terminals2 = self.com_memory.sample(
@@ -292,7 +292,7 @@ class ExpDQN2(object):
                 self.target_action_value, {self.state: next_states2})
             observed_value2 = rewards2 + discount * \
                 np.max(next_state_value2, 1, keepdims=True)
-            observed_value2[terminals2] = rewards2[terminals2] / (1 - discount)
+            observed_value2[terminals2] = rewards2[terminals2]
 
             states = np.concatenate((states, states2), 0)
             actions = np.concatenate((actions, actions2), 0)
