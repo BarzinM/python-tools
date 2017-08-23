@@ -3,8 +3,9 @@ from numpy.random import randint, seed, choice
 
 
 class Buffer(object):
+
     def __init__(self, length, shape):
-        self.buffer = empty((length, *shape))
+        self.buffer = empty([length] + list(shape))
         self.pointer = 0
         self.legnth = length
         self.add = self._fill
@@ -48,7 +49,8 @@ class Buffer(object):
         return str(self.buffer)
 
 
-class GeneralMemory(object):
+class Memory(object):
+
     def __init__(self, size, *dimensions):
         self.memory = []
         for dim in dimensions:
@@ -68,16 +70,20 @@ class GeneralMemory(object):
         self.filled = False
         self.added = 0
 
-    @property
     def seed(self, value):
         seed(value)
 
-    @property
     def isFull(self):
         return self.filled
 
+    def shape(self):
+        return [m.shape for m in self.memory]
+
     @property
-    def count(self):
+    def size(self):
+        return self.max_length
+
+    def __len__(self):
         if self.filled:
             return self.max_length
         else:
@@ -95,7 +101,8 @@ class GeneralMemory(object):
 
     def addBatch(self, *inputs):
         length = len(inputs[0])
-        self.length = min(self.max_length, self.pointer + length)
+        self.length = max(self.length, min(
+            self.max_length, self.pointer + length))
         self.added += length
 
         batch_start = 0
@@ -148,7 +155,8 @@ class GeneralMemory(object):
         return '\n'.join([str(m[:self.count()]) for m in self.memory])
 
 
-class PrioritizedExperienceReplay(GeneralMemory):
+class PrioritizedExperienceReplay(Memory):
+
     def __init__(self, alpha, size, *dimensions):
         self.alpha = alpha
         super(PrioritizedExperienceReplay, self).__init__(size, *dimensions)
@@ -172,8 +180,9 @@ class PrioritizedExperienceReplay(GeneralMemory):
 
     def _sampleFromHalfFull(self, batch_size):
         try:
-            self.index = choice(self.pointer, batch_size,
-                                p=self.priority[:self.pointer] / sum(self.priority[:self.pointer]))
+            p = self.priority[:self.pointer] / \
+                sum(self.priority[:self.pointer])
+            self.index = choice(self.pointer, batch_size, p=p)
         except ValueError:
             print('vals', self.sum, sum(self.priority))
             raise
@@ -199,17 +208,17 @@ if __name__ == "__main__":
     import numpy as np
 
     def healthy_copy():
-        m = GeneralMemory(5, 1)
+        m = Memory(5, 1)
         m.count()
         m.addBatch(np.reshape(np.arange(5), (5, 1)))
-        n = GeneralMemory(5, 1)
+        n = Memory(5, 1)
         n.add([0])
         n[0] = m[0]
         m[0][0][0] = 666
         return n[0][0][0] != m[0][0][0]
 
     def healthy_get_batch_index():
-        m = GeneralMemory(5, 1)
+        m = Memory(5, 1)
         m.addBatch(np.reshape(np.arange(5), (5, 1)))
         m.sample(3)
         indexes = m.getBatchIndex()
@@ -217,10 +226,10 @@ if __name__ == "__main__":
         return len(indexes) == 3
 
     def set_item():
-        m = GeneralMemory(5, 1, 1)
+        m = Memory(5, 1, 1)
         m[0] = [[1], [3]]
         a = (m.memory[0][0] == 1 and m.memory[1][0] == 3)
-        m[0] = [1],[3]
+        m[0] = [1], [3]
         b = (m.memory[0][0] == 1 and m.memory[1][0] == 3)
         return a and b
 

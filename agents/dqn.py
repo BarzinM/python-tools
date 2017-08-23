@@ -1,33 +1,41 @@
 import numpy as np
 import tensorflow as tf
-from approximators import fullyConnected, copyScopeVars, getScopeParameters, entropyLoss
-from memory import GeneralMemory
+from tfmisc import copyScopeVars, getScopeParameters, entropyLoss
+from networks import fullyConnected
+from memory import Memory
 from stats import RunningAverage
 from collections import deque
+
 
 class DQN(object):
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
-        self.state = tf.placeholder(tf.float32, [None, state_dim], "states")
+        if type(state_dim) == int:
+            self.state = tf.placeholder(tf.float32, [None, state_dim], "states")
+        if type(state_dim) in [list,tuple]:
+            self.state = tf.placeholder(tf.float32, [None, *state_dim], "states")
+
         self.action_ph = tf.placeholder(tf.int32, [None], "actions")
         self.action_value_ph = tf.placeholder(
             tf.float32, [None], "action_values")
-        self.memory = GeneralMemory(
+        self.memory = Memory(
             memory_size, state_dim, 0, 1, state_dim, -1)
 
-    def initialize(self, layer_dims=[100], optimizer=None):
-        def _make():
-            flow = self.state
+    def initialize(self, layer_dims, optimizer, learner_target_inputs=None):
+        def _make(flow):
             for i, size in enumerate(layer_dims):
-                flow = fullyConnected("layer%i" % i, flow, size, tf.nn.relu, initializer=.003)
+                flow = fullyConnected(
+                    "layer%i" % i, flow, size, tf.nn.relu, initializer=.003)
 
             return fullyConnected(
                 "output_layer", flow, self.action_dim, initializer=.003)
 
+        learner_target_inputs = learner_target_inputs or [
+            self.state, self.state]
         with tf.variable_scope('learner'):
-            self.action_value = _make()
+            self.action_value = _make(learner_target_inputs[0])
         with tf.variable_scope('target'):
-            self.target_action_value = _make()
+            self.target_action_value = _make(learner_target_inputs[1])
 
         self.update_op = copyScopeVars('learner', 'target')
 
@@ -113,7 +121,6 @@ class DoubleDQN(DQN):
         return l
 
 
-
 class DoubleDuelingDQN(DuelingDQN, DoubleDQN):
     pass
 
@@ -125,9 +132,9 @@ class ExpDQN(object):
         self.action_ph = tf.placeholder(tf.int32, [None])
         self.action_value_ph = tf.placeholder(tf.float32, [None])
 
-        self.memory = GeneralMemory(
+        self.memory = Memory(
             memory_size, state_dim, 0, 1, state_dim, -1)
-        self.com_memory = GeneralMemory(
+        self.com_memory = Memory(
             memory_size, state_dim, 0, 1, state_dim, -1)
 
         self.com_average = RunningAverage(.001)
@@ -234,9 +241,9 @@ class ExpDQN2(object):
         self.action_ph = tf.placeholder(tf.int32, [None], "actions")
         self.action_value_ph = tf.placeholder(
             tf.float32, [None], "action_values")
-        self.memory = GeneralMemory(
+        self.memory = Memory(
             memory_size, state_dim, 0, 1, state_dim, -1)
-        self.com_memory = GeneralMemory(
+        self.com_memory = Memory(
             memory_size, state_dim, 0, 1, state_dim, -1)
 
         self.com_avg = RunningAverage(.001, 1.)

@@ -5,19 +5,29 @@ from numpy.linalg import norm
 
 
 class RunningAverage(object):
+
     def __init__(self, tau, initial_value=0.):
         self.tau = tau
         self.avg = initial_value
 
-    def update(self, value):
+    @property
+    def value(self, value):
         self.avg = self.avg * (1 - self.tau) + value * self.tau
+
+    @property
+    def value(self):
         return self.avg
 
-    def get(self):
-        return self.avg
+    def __iadd__(self, value):
+        self.avg = self.avg * (1 - self.tau) + value * self.tau
+        return self
+
+    def __add__(self, value):
+        self.avg = self.avg * (1 - self.tau) + value * self.tau
 
 
 class RunningVariance(object):
+
     def __init__(self, tau, initial_avg=0., initial_var=0.):
         self.tau = tau
         self.avg = initial_avg
@@ -31,6 +41,7 @@ class RunningVariance(object):
 
 
 class Normality(object):
+
     def __init__(self, tol, window):
         self.window = window
         self.tol = tol
@@ -96,5 +107,3 @@ class Normality(object):
 
 def cosineSimilarity(a, b):
     return dot(a, b) / (norm(a) * norm(b))
-
-

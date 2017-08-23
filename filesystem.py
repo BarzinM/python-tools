@@ -1,6 +1,7 @@
 import os
 import shutil
 import inspect
+import glob
 
 
 def mkd(path):
@@ -22,5 +23,9 @@ def here():
     return os.path.dirname(os.path.realpath(module.__file__))
 
 
+def ls(dir, extention='*.*'):
+    return glob.glob(os.path.join(dir, extention))
+
 if __name__ == "__main__":
-    here()
+    print(here())
+    print(ls(here()))
