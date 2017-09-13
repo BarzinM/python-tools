@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 
 def resize(array, dimensions):
-    a = np.empty((len(array), *dimensions), dtype=np.uint8)
+    a = np.empty([len(array)] + list(dimensions), dtype=np.uint8)
     for i in range(len(array)):
         a[i] = cv2.resize(array[i], dimensions[:2])
 
@@ -43,12 +43,12 @@ def transform(image, rotation, translation_h, translation_v, scale_h, scale_v):
     return image
 
 
-def batchTransform(data, rotation, translation, scaling):
-    size = len(data)
-    rotations = np.random.uniform(-rotation, rotation, size)
-    scalings = np.exp(np.random.uniform(- scaling, scaling, (size, 2)))
-    translations = np.random.uniform(-translation, translation, (size, 2))
-    for i in range(size):
-        data[i] = transform(data[i], rotations[i], *translations[i], *scalings[i])
+# def batchTransform(data, rotation, translation, scaling):
+#     size = len(data)
+#     rotations = np.random.uniform(-rotation, rotation, size)
+#     scalings = np.exp(np.random.uniform(- scaling, scaling, (size, 2)))
+#     translations = np.random.uniform(-translation, translation, (size, 2))
+#     for i in range(size):
+#         data[i] = transform(data[i], rotations[i], *translations[i], *scalings[i])
 
-    return data
+#     return data

@@ -8,11 +8,13 @@ from collections import deque
 
 
 class DQN(object):
+
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
         if type(state_dim) == int:
-            self.state = tf.placeholder(tf.float32, [None, state_dim], "states")
-        if type(state_dim) in [list,tuple]:
+            self.state = tf.placeholder(
+                tf.float32, [None, state_dim], "states")
+        if type(state_dim) in [list, tuple]:
             self.state = tf.placeholder(tf.float32, [None, *state_dim], "states")
 
         self.action_ph = tf.placeholder(tf.int32, [None], "actions")
@@ -72,6 +74,7 @@ class DQN(object):
 
 
 class DuelingDQN(DQN):
+
     def initialize(self, layer_dims=[100], optimizer=None):
         def _make():
             flow = self.state
@@ -102,22 +105,19 @@ class DuelingDQN(DQN):
 
 
 class DoubleDQN(DQN):
+
     def train(self, session, batch=None, discount=.97):
         states, actions, rewards, next_states, terminals = self.memory.sample(
             batch)
-        action_value = session.run(
-            self.action_value, {self.state: states})
+        target_av, action_value = session.run(
+            [self.target_action_value, self.action_value], {self.state: next_states})
         next_action = np.argmax(action_value, axis=1)
-        next_state_value = session.run(
-            self.target_action_value, {self.state: next_states})
-        observed_value = rewards + \
-            np.expand_dims(
-                discount * next_state_value[np.arange(batch), next_action], -1)
-        observed_value[terminals] = rewards[terminals]
-        action_value[np.arange(batch), actions] = observed_value[:, 0]
+        observed_value = rewards[:, 0] + discount * \
+            target_av[np.arange(batch), next_action]
+        observed_value[terminals] = rewards[terminals, 0]
 
         _, l = session.run([self.train_op, self._loss], {
-            self.state: states, self.action_ph: action_value})
+            self.state: states, self.action_value_ph: observed_value})
         return l
 
 
@@ -126,6 +126,7 @@ class DoubleDuelingDQN(DuelingDQN, DoubleDQN):
 
 
 class ExpDQN(object):
+
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
         self.state = tf.placeholder(tf.float32, [None, state_dim])
@@ -235,6 +236,7 @@ class ExpDQN(object):
 
 
 class ExpDQN2(object):
+
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
         self.state = tf.placeholder(tf.float32, [None, state_dim], "states")

@@ -82,8 +82,8 @@ class Conv(object):
             flow = tf.nn.dropout(flow, keep_prob=dropout)
 
         i = 0
+        self.layers = [flow]
         for w, b in self.conv_params:
-
             flow = tf.nn.conv2d(
                 flow, w, [1, 1, 1, 1], padding=self.padding)
             if bias:
@@ -98,6 +98,7 @@ class Conv(object):
                     flow, normalize, 'normalize_layer_%i' % i)
             if dropout is not None:
                 flow = tf.nn.dropout(flow, keep_prob=dropout)
+            self.layers.append(flow)
             i += 1
 
         print("Conv shapes", self._shapes)
