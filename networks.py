@@ -47,6 +47,36 @@ def fullyConnected(name, input_layer, output_dims, activation=None, initializer=
     return next_layer
 
 
+class Convolutional(object):
+    def __init__(self):
+        self.parameters = []
+
+    def addConv(self, patch_size, depth, stride):
+        self.parameters.append((patch_size, depth, stride))
+
+    def model(self, input):
+        # self.input_shape = [int(a) for a in input.get_shape()]
+
+        # self.input_shape[-1]
+        previous_depth = input.get_shape().as_list()[-1]
+        flow = input
+        self.loss = 0
+        for patch_size, depth, stride in self.parameters:
+            # w,b = generateWeightAndBias([patch_size,patch_size,previous_depth,depth])
+            w = tf.Variable(tf.truncated_normal(
+                [patch_size, patch_size, previous_depth, depth], stddev=.1))
+            b = tf.Variable(tf.constant(.1, shape=(depth,)))
+            self.loss += tf.nn.l2_loss(w)
+            previous_depth = depth
+            flow = tf.nn.conv2d(flow, w, strides=[1, 1, 1, 1], padding='SAME')
+            flow = tf.nn.bias_add(flow, b)
+            if stride > 1:
+                flow = tf.nn.max_pool(flow, ksize=[1, stride, stride, 1], strides=[
+                                      1, stride, stride, 1], padding='SAME')
+            flow = tf.nn.relu(flow)
+        return flow
+
+
 class Conv(object):
 
     def __init__(self, depth, stride, patch, padding):
@@ -192,3 +222,43 @@ class ContinuousPolicy(object):
 
     def entropy(self):
         return self.distribution.entropy()
+
+
+class BaseNetwork(object):
+
+    def __init__(self):
+        # self.frame_inputs = tf.placeholder(
+        #     tf.float32, (None, INTPUT_SIZE, INTPUT_SIZE, 3), "frame_input")
+        # self.lidar_inputs = tf.placeholder(
+        #     tf.float32, (None, 1, LIDAR_RANGE[1] - LIDAR_RANGE[0], 1), "lidar_input")
+        # self.drop = tf.placeholder(tf.float32, name="dropout")
+        # self.normalize = tf.placeholder(tf.bool, name="normalize")
+        self.global_step = tf.Variable(0, trainable=False)
+        # learning_rate = LEARNING_RATE
+        # self.learning_rate = tf.train.exponential_decay(
+        #     LEARNING_RATE, self.global_step, DECAY_STEP, LEARNING_DECAY)
+        # self.save_ready = False
+
+    def initSaver(self):
+        # self.save_ready = True
+        self.saver = tf.train.Saver(max_to_keep=40)
+
+    def initHistogram(self, size, numbers):
+        self.counter = 0
+        self.histo = np.empty((size, numbers))
+
+    def store(self, *args):
+        self.histo[self.counter] = args
+        self.counter += 1
+
+    def saveHistogram(self, path):
+        np.save(path, self.histo)
+
+    def saveModel(self, session, path, step=0):
+        # if self.save_ready:
+        path = self.saver.save(
+            session, path, global_step=step or self.global_step)
+        print("Saved model to", path)
+
+    def restoreModel(self, session, path):
+        self.saver.restore(session, path)

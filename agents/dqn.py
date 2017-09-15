@@ -39,6 +39,7 @@ class DQN(object):
         with tf.variable_scope('target'):
             self.target_action_value = _make(learner_target_inputs[1])
 
+        self.policy_action = tf.argmax(self.action_value,axis=1)
         self.update_op = copyScopeVars('learner', 'target')
 
         row = tf.range(0, tf.shape(self.action_value)[0])
@@ -64,7 +65,7 @@ class DQN(object):
         return l
 
     def policy(self, session, state):
-        return session.run(self.action_value, {self.state: [state]})[0]
+        return session.run(self.policy_action, {self.state: [state]})[0]
 
     def memorize(self, state, action, reward, next_state, terminal):
         self.memory.add(state, action, reward, next_state, terminal)
