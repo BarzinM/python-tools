@@ -8,6 +8,78 @@ from collections import deque
 
 
 class DQN(object):
+    def __init__(self, state_dim, action_dim, memory_size):
+        self.action_dim = action_dim
+        if type(state_dim) == int:
+            self.state = tf.placeholder(
+                tf.float32, [None, state_dim], "states")
+        if type(state_dim) in [list, tuple]:
+            self.state = tf.placeholder(
+                tf.float32, [None] + list(state_dim), "states")
+
+        self.action_ph = tf.placeholder(tf.int32, [None], "actions")
+        self.action_value_ph = tf.placeholder(
+            tf.float32, [None], "action_values")
+        self.memory = Memory(
+            memory_size, (state_dim, np.float), (0, np.uint8), (0, float), (state_dim, np.float), (0, bool))
+        print("Memory Bytes:", self.memory.nbytes() / (1024**3))
+
+    def initialize(self, layer_dims, optimizer, learner_target_inputs=None):
+        def _make(flow):
+            for i, size in enumerate(layer_dims):
+                flow = fullyConnected(
+                    "layer%i" % i, flow, size, tf.nn.relu)
+
+            return fullyConnected(
+                "output_layer", flow, self.action_dim)
+
+        learner_target_inputs = learner_target_inputs or [
+            self.state, self.state]
+        with tf.variable_scope('learner'):
+            self.action_value = _make(learner_target_inputs[0])
+        with tf.variable_scope('target'):
+            self.target_action_value = _make(learner_target_inputs[1])
+
+        row = tf.range(tf.shape(self.action_value)[0])
+        indexes = tf.stack([row, self.action_ph], axis=1)
+
+        updated = tf.Variable([], trainable=False, validate_shape=False)
+        updated = tf.assign(updated, self.action_value, validate_shape=False)
+        action_value = tf.scatter_nd_update(
+            updated, indexes, self.action_value_ph)
+
+        self._loss = tf.losses.huber_loss(
+            self.action_value, action_value)
+
+        self.policy_action = tf.argmax(self.action_value, axis=1)
+        self.update_op = copyScopeVars('learner', 'target')
+
+        self.train_op = optimizer.minimize(self._loss, var_list=getScopeParameters('learner'))
+
+    def train(self, session, batch=None, discount=.97):
+        states, actions, rewards, next_states, terminals = self.memory.sample(
+            batch)
+        next_state_value = session.run(
+            self.target_action_value, {self.state: next_states})
+        observed_value = rewards + (1. - terminals) * discount * \
+            np.max(next_state_value, 1)
+
+        return session.run([self._loss, self.train_op], {
+            self.state: states,
+            self.action_ph: actions,
+            self.action_value_ph: observed_value})[0]
+
+    def policy(self, session, state):
+        return session.run(self.policy_action, {self.state: [state]})[0]
+
+    def memorize(self, state, action, reward, next_state, terminal):
+        self.memory.add(state, action, reward, next_state, terminal)
+
+    def update(self, session):
+        session.run(self.update_op)
+
+
+class DQN2(object):
 
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
@@ -21,7 +93,7 @@ class DQN(object):
         self.action_value_ph = tf.placeholder(
             tf.float32, [None], "action_values")
         self.memory = Memory(
-            memory_size, state_dim, 0, 1, state_dim, -1)
+            memory_size, (state_dim, np.float), (0, np.uint8), (0, float), (state_dim, np.float), (0, bool))
 
     def initialize(self, layer_dims, optimizer, learner_target_inputs=None):
         def _make(flow):
@@ -39,15 +111,16 @@ class DQN(object):
         with tf.variable_scope('target'):
             self.target_action_value = _make(learner_target_inputs[1])
 
-        self.policy_action = tf.argmax(self.action_value,axis=1)
+        self.policy_action = tf.argmax(self.action_value, axis=1)
         self.update_op = copyScopeVars('learner', 'target')
 
         row = tf.range(0, tf.shape(self.action_value)[0])
         indexes = tf.stack([row, self.action_ph], axis=1)
         action_value = tf.gather_nd(self.action_value, indexes)
 
-        self.single_loss = tf.square(action_value - self.action_value_ph)
-        self._loss = tf.reduce_mean(self.single_loss)
+        # self.single_loss = tf.square(action_value - self.action_value_ph)
+        # self._loss = tf.reduce_mean(self.single_loss)
+        self._loss = tf.losses.huber_loss(self.action_value_ph, action_value)
 
         self.train_op = optimizer.minimize(self._loss)
 
@@ -57,11 +130,11 @@ class DQN(object):
         next_state_value = session.run(
             self.target_action_value, {self.state: next_states})
         observed_value = rewards + discount * \
-            np.max(next_state_value, 1, keepdims=True)
+            np.max(next_state_value, 1)
         observed_value[terminals] = rewards[terminals]
 
         _, l = session.run([self.train_op, self._loss], {
-            self.state: states, self.action_ph: actions, self.action_value_ph: observed_value[:, 0]})
+            self.state: states, self.action_ph: actions, self.action_value_ph: observed_value})
         return l
 
     def policy(self, session, state):

@@ -1,4 +1,4 @@
-from numpy import empty, zeros, copy, sum, power
+from numpy import empty, zeros, copy, sum, power, array, uint8, uint32
 from numpy.random import randint, seed, choice
 
 
@@ -52,16 +52,18 @@ class Buffer(object):
 class Memory(object):
 
     def __init__(self, size, *dimensions):
+        assert type(size) == int
         self.memory = []
-        for dim in dimensions:
+        for dim, t in dimensions:
             if type(dim) in [tuple, list]:
-                self.memory.append(empty([size] + list(dim), dtype=float))
+                m = zeros([size] + list(dim), dtype=t)
+                self.memory.append(m)
             elif dim == 0:
-                self.memory.append(empty((size,), dtype=int))
+                self.memory.append(zeros((size,), dtype=t))
             elif dim > 0:
-                self.memory.append(empty((size, dim), dtype=float))
+                self.memory.append(zeros((size, int(dim)), dtype=t))
             else:
-                self.memory.append(zeros((size,), dtype=bool))
+                raise ValueError
 
         self.pointer = 0
         self.max_length = size
@@ -79,7 +81,6 @@ class Memory(object):
     def shape(self):
         return [m.shape for m in self.memory]
 
-    @property
     def size(self):
         return self.max_length
 
@@ -136,6 +137,7 @@ class Memory(object):
         return self.index
 
     def next(self):
+        # maybe should use the method instead
         self.index = (self.index + 1) % self.length
         return [m[self.index] for m in self.memory]
 
@@ -152,7 +154,23 @@ class Memory(object):
             self.memory[i][key] = copy(item)
 
     def __str__(self):
-        return '\n'.join([str(m[:self.count()]) for m in self.memory])
+        size = self.__len__()
+        return '\n'.join([str(m[:size]) for m in self.memory])
+
+    def nbytes(self, unit='b'):
+        unit = unit.lower()
+        if unit in ['b', 'byte', 'bytes']:
+            c = 1
+        elif unit in ['k', 'kb', 'kilo', 'kilobytes']:
+            c = 1024
+        elif unit in ['m', 'mb', 'mega', 'megabytes']:
+            c = 1024**2
+        elif unit in ['g', 'gb', 'giga', 'gigabytes']:
+            c = 1024**3
+        else:
+            raise ValueError
+
+        return sum([a.nbytes for a in self.memory]) / c
 
 
 class PrioritizedExperienceReplay(Memory):
@@ -208,17 +226,16 @@ if __name__ == "__main__":
     import numpy as np
 
     def healthy_copy():
-        m = Memory(5, 1)
-        m.count()
+        m = Memory(5, (1, np.int32))
         m.addBatch(np.reshape(np.arange(5), (5, 1)))
-        n = Memory(5, 1)
+        n = Memory(5, (1, np.int32))
         n.add([0])
         n[0] = m[0]
         m[0][0][0] = 666
         return n[0][0][0] != m[0][0][0]
 
     def healthy_get_batch_index():
-        m = Memory(5, 1)
+        m = Memory(5, (1, np.int32))
         m.addBatch(np.reshape(np.arange(5), (5, 1)))
         m.sample(3)
         indexes = m.getBatchIndex()
@@ -226,13 +243,21 @@ if __name__ == "__main__":
         return len(indexes) == 3
 
     def set_item():
-        m = Memory(5, 1, 1)
+        m = Memory(5, (1, np.int32), (1, np.int32))
         m[0] = [[1], [3]]
         a = (m.memory[0][0] == 1 and m.memory[1][0] == 3)
         m[0] = [1], [3]
         b = (m.memory[0][0] == 1 and m.memory[1][0] == 3)
         return a and b
 
+    def setter():
+        m = Memory(5, (1, np.int32), (3, np.int32))
+        m[1] = 1, [2, 2, 2]
+        a = m.memory[0][1][0] == 1
+        b = np.all([m.memory[1][1][i] == 2 for i in range(3)])
+        return a and b
+
     assert healthy_copy()
     assert healthy_get_batch_index()
     assert set_item()
+    assert setter()

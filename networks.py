@@ -14,66 +14,110 @@ def normalizeBatch(x, is_training, name):
                       scope=name)
 
 
-def fullyConnected(name, input_layer, output_dims, activation=None, initializer=None, bias=True):
+def flatten(tensor):
+    shape = tensor.get_shape().as_list()
+    if len(shape) == 2:
+        return tensor
+    flat_size = np.prod(shape[1:], dtype=np.int32)
+    print("Flatting tensor %s from %s to %s" %
+          (tensor.name, str(shape), str([shape[0], flat_size])))
+    return tf.reshape(tensor, [-1, flat_size])
 
-    if initializer is None or initializer == 'xavier':
-        initializer = xavier_initializer()
-    elif type(initializer) in [int, float]:
-        initializer = tf.random_uniform_initializer(
-            minval=-initializer, maxval=initializer)
 
-    if type(input_layer) in [list, tuple]:
-        print("fully connected shapes", [[l.get_shape().as_list()[-1], output_dims]
-                                         for i, l in enumerate(input_layer)])
-        weights = [tf.get_variable("%s_w_%i" % (name, i), shape=[l.get_shape().as_list()[-1], output_dims],
-                                   dtype=tf.float32, initializer=initializer) for i, l in enumerate(input_layer)]
-        mults = [tf.matmul(l, w) for l, w in zip(input_layer, weights)]
-        next_layer = tf.add_n(mults)
+def fanInStd(shape):
+    if type(shape) == int:
+        fan_in = shape
+    elif type(shape) in [list, tuple]:
+        fan_in = np.prod(shape[:-1])
+    return 2. / np.sqrt(fan_in)
+
+
+def fanIn(shape, mean=0.):
+    std = fanInStd(shape)
+    return tf.random_uniform_initializer(minval=-std + mean,
+                                         maxval=std + mean)
+
+
+def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=True):
+    assert type(name) == str
+    assert type(output_dims) == int
+    assert type(bias) == bool
+
+    if type(flow) in [list, tuple]:
+        print("FULLY CONNECTING A LIST")
+        mults = [fullyConnected(name='%s_%i' % (name, i),
+                                flow=tensor,
+                                output_dims=output_dims,
+                                activation=None,
+                                initializer=initializer,
+                                bias=False) for i, tensor in enumerate(flow)]
+
+        flow = tf.add_n(mults)
 
     else:
-        input_dims = input_layer.get_shape().as_list()[1:]
-        weight = tf.get_variable(name + "_w", shape=input_dims + [output_dims],
-                                 dtype=tf.float32, initializer=initializer)
-        next_layer = tf.matmul(input_layer, weight)
+        flow = flatten(flow)
+        dimension = flow.get_shape().as_list()[-1]
+
+        if initializer is None:
+            initializer = fanIn(dimension)
+        elif initializer == 'xavier':
+            xavier_initializer()
+        elif type(initializer) in [int, float]:
+            initializer = tf.random_uniform_initializer(minval=-initializer,
+                                                        maxval=initializer)
+
+        weight = tf.get_variable(name + "_weights",
+                                 shape=[dimension, output_dims],
+                                 dtype=tf.float32,
+                                 initializer=fanIn(dimension))
+        print("Fully connected weight:", name +
+              "_w", weight.get_shape().as_list())
+        flow = tf.matmul(flow, weight)
 
     if bias:
-        bias = tf.get_variable(
-            name + "_b", shape=output_dims, dtype=tf.float32, initializer=initializer)
-        next_layer = tf.add(next_layer, bias)
+        bias = tf.get_variable(name + "_biases",
+                               shape=[output_dims],
+                               dtype=tf.float32,
+                               initializer=fanIn(dimension))
+        flow += bias
 
-    if activation:
-        next_layer = activation(next_layer, name=name + "_activated")
+    if activation is not None:
+        flow = activation(flow, name=name + "_activated")
 
-    return next_layer
+    return flow, weight, bias
 
 
 class Convolutional(object):
     def __init__(self):
-        self.parameters = []
+        self.layers = []
+        self.vars = []
 
-    def addConv(self, patch_size, depth, stride):
-        self.parameters.append((patch_size, depth, stride))
+    def addConv(self, depth, patch_size, stride):
+        if type(patch_size) == int:
+            patch_size = [patch_size, patch_size]
+        if type(stride) == int:
+            stride = [stride, stride]
+        self.layers.append((depth, patch_size, stride))
 
-    def model(self, input):
-        # self.input_shape = [int(a) for a in input.get_shape()]
-
-        # self.input_shape[-1]
-        previous_depth = input.get_shape().as_list()[-1]
-        flow = input
-        self.loss = 0
-        for patch_size, depth, stride in self.parameters:
-            # w,b = generateWeightAndBias([patch_size,patch_size,previous_depth,depth])
-            w = tf.Variable(tf.truncated_normal(
-                [patch_size, patch_size, previous_depth, depth], stddev=.1))
-            b = tf.Variable(tf.constant(.1, shape=(depth,)))
-            self.loss += tf.nn.l2_loss(w)
+    def model(self, flow):
+        previous_depth = flow.get_shape().as_list()[-1]
+        for i, (depth, patch_size, stride) in enumerate(self.layers):
+            shape = patch_size + [previous_depth, depth]
+            w = tf.get_variable("conv_w_%i" % i,
+                                shape=shape,
+                                initializer=fanIn(shape))
+            b = tf.get_variable("conv_b_%i" % i,
+                                shape=[depth],
+                                initializer=fanIn(shape))
+            self.vars.append((w, b, stride))
             previous_depth = depth
-            flow = tf.nn.conv2d(flow, w, strides=[1, 1, 1, 1], padding='SAME')
-            flow = tf.nn.bias_add(flow, b)
-            if stride > 1:
-                flow = tf.nn.max_pool(flow, ksize=[1, stride, stride, 1], strides=[
-                                      1, stride, stride, 1], padding='SAME')
-            flow = tf.nn.relu(flow)
+        self.layers = []
+
+        for w, b, stride in self.vars:
+            flow = tf.nn.conv2d(
+                flow, w, strides=[1, *stride, 1], padding='VALID')
+            flow = tf.nn.relu(flow + b)
+
         return flow
 
 
@@ -117,7 +161,7 @@ class Conv(object):
             flow = tf.nn.conv2d(
                 flow, w, [1, 1, 1, 1], padding=self.padding)
             if bias:
-                flow += b
+                flow = tf.nn.bias_add(flow, b, 'NHWC')
             self._shapes.append(flow.get_shape().as_list()[1:-1])
             flow = tf.nn.max_pool(
                 flow, [1] + self.stride + [1], [1] + self.stride + [1], padding=self.padding)
@@ -227,17 +271,12 @@ class ContinuousPolicy(object):
 class BaseNetwork(object):
 
     def __init__(self):
-        # self.frame_inputs = tf.placeholder(
-        #     tf.float32, (None, INTPUT_SIZE, INTPUT_SIZE, 3), "frame_input")
-        # self.lidar_inputs = tf.placeholder(
-        #     tf.float32, (None, 1, LIDAR_RANGE[1] - LIDAR_RANGE[0], 1), "lidar_input")
         # self.drop = tf.placeholder(tf.float32, name="dropout")
         # self.normalize = tf.placeholder(tf.bool, name="normalize")
-        self.global_step = tf.Variable(0, trainable=False)
+        self.global_step = tf.train.get_or_create_global_step()
         # learning_rate = LEARNING_RATE
         # self.learning_rate = tf.train.exponential_decay(
         #     LEARNING_RATE, self.global_step, DECAY_STEP, LEARNING_DECAY)
-        # self.save_ready = False
 
     def initSaver(self):
         # self.save_ready = True
@@ -255,7 +294,6 @@ class BaseNetwork(object):
         np.save(path, self.histo)
 
     def saveModel(self, session, path, step=0):
-        # if self.save_ready:
         path = self.saver.save(
             session, path, global_step=step or self.global_step)
         print("Saved model to", path)

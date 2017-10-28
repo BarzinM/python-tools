@@ -2,6 +2,20 @@ import os
 import shutil
 import inspect
 import glob
+import __main__
+
+
+def mainFileName(full=False):
+    path = __main__.__file__
+    path = os.path.split(path)[1]
+    if not full:
+        path = os.path.splitext(path)[0]
+    return path
+
+
+def mainFilePath():
+    import __main__
+    return os.path.split(__main__.__file__)[0]
 
 
 def mkd(path):
@@ -25,6 +39,7 @@ def here():
 
 def ls(dir, extention='*.*'):
     return glob.glob(os.path.join(dir, extention))
+
 
 if __name__ == "__main__":
     print(here())
