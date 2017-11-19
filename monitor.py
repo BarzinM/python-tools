@@ -1,20 +1,41 @@
 import tensorflow as tf
 from sys import stdout
-import os
-import __main__
-from filesystem import mainFileName
+from filesystem import mainFileName, mkd
+import matplotlib.pyplot as plt
+
+
+class Figure(object):
+
+    def __init__(self):
+        self.fig, self.ax = plt.subplots(1, 1)
+        # self.handle = None
+
+    def imshow(self, value):
+        self.img_handle = self.ax.imshow(value, origin='lower', cmap='gray')
+        self.fig.canvas.draw()
+        self.imshow = self._udpate_image
+
+    def _udpate_image(self, value):
+        self.img_handle.set_data(value)
+        self.fig.canvas.draw()
+
+    def plot(self, x, y, *args):
+        self.plot_handle = self.ax.plot(x, y, *args)[0]
+        self.plot = self._update_plot
+
+    def _update_plot(self, x, y, *args):
+        self.plot_handle.set_data(x, y)
 
 
 class Monitor(object):
+
     def __init__(self, path=None, sub='', session=None, verbose=True):
         if path is None:
-            path = 'summary/' + mainFileName()
-        path = path + '/' + sub
-        if os.path.isdir(path):
-            import shutil
-            shutil.rmtree(path)
+            path = mainFileName()
+        path = 'summary/' + path + '/' + sub
+        path = mkd(path)
         if verbose:
-            print("Saving monitor files to", path)
+            print("[INFO] Monitor object message: Saving monitor files to", path)
         if session is None:
             self.writer = tf.summary.FileWriter(path)
         else:
@@ -71,7 +92,9 @@ class Monitor(object):
 
 
 class Display(object):
+
     def __init__(self):
+        # rows, columns = subprocess.check_output(['stty', 'size']).decode().split()
         self.lines = 0
 
     def print(self, *args):

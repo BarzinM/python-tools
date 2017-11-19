@@ -1,11 +1,10 @@
-from numpy import empty, zeros, copy, sum, power, array, uint8, uint32
-from numpy.random import randint, seed, choice
+import numpy as np
 
 
 class Buffer(object):
 
     def __init__(self, length, shape):
-        self.buffer = empty([length] + list(shape))
+        self.buffer = np.empty([length] + list(shape))
         self.pointer = 0
         self.legnth = length
         self.add = self._fill
@@ -34,10 +33,10 @@ class Buffer(object):
         self.pointer = (self.pointer + 1) % self.legnth
 
     def _sampleFromHalfFull(self, batch_size):
-        return self.buffer[randint(self.pointer, size=(batch_size))]
+        return self.buffer[np.random.randint(self.pointer, size=(batch_size))]
 
     def _sampleFromFull(self, batch_size):
-        return self.buffer[randint(self.legnth, size=(batch_size))]
+        return self.buffer[np.random.randint(self.legnth, size=(batch_size))]
 
     def isFull(self):
         return self.filled
@@ -56,12 +55,12 @@ class Memory(object):
         self.memory = []
         for dim, t in dimensions:
             if type(dim) in [tuple, list]:
-                m = zeros([size] + list(dim), dtype=t)
+                m = np.zeros([size] + list(dim), dtype=t)
                 self.memory.append(m)
             elif dim == 0:
-                self.memory.append(zeros((size,), dtype=t))
+                self.memory.append(np.zeros((size,), dtype=t))
             elif dim > 0:
-                self.memory.append(zeros((size, int(dim)), dtype=t))
+                self.memory.append(np.zeros((size, int(dim)), dtype=t))
             else:
                 raise ValueError
 
@@ -72,8 +71,26 @@ class Memory(object):
         self.filled = False
         self.added = 0
 
+    def save(self, path):
+        import os
+        if os.path.exists(path + '.npz'):
+            raise FileExistsError("file with this name already exists")
+        dictionary = {'%i' % i: self.memory[i][:len(self)]
+                      for i in range(len(self.memory))}
+        np.savez(path, **dictionary)
+
+    def load(self, path):
+        if path[-4:] != '.npz':
+            path += '.npz'
+        dictionary = np.load(path)
+        
+        assert self.max_length >= dictionary['0'].shape[0]
+
+        self.addBatch(*[dictionary['%i' % i]
+                        for i in range(len(dictionary.keys()))])
+
     def seed(self, value):
-        seed(value)
+        np.seed(value)
 
     def isFull(self):
         return self.filled
@@ -85,7 +102,7 @@ class Memory(object):
         return self.max_length
 
     def __len__(self):
-        if self.filled:
+        if self.isFull():
             return self.max_length
         else:
             return self.pointer
@@ -142,7 +159,7 @@ class Memory(object):
         return [m[self.index] for m in self.memory]
 
     def sample(self, batch_size):
-        self.index = randint(self.length, size=(batch_size))
+        self.index = np.random.randint(self.length, size=(batch_size))
         return [m[self.index] for m in self.memory]
 
     def __getitem__(self, key):
@@ -151,7 +168,7 @@ class Memory(object):
     def __setitem__(self, *args):
         key = args[0]
         for i, item in enumerate(args[1:][0]):
-            self.memory[i][key] = copy(item)
+            self.memory[i][key] = np.copy(item)
 
     def __str__(self):
         size = self.__len__()
@@ -170,7 +187,7 @@ class Memory(object):
         else:
             raise ValueError
 
-        return sum([a.nbytes for a in self.memory]) / c
+        return np.sum([a.nbytes for a in self.memory]) / c
 
 
 class PrioritizedExperienceReplay(Memory):
@@ -178,7 +195,7 @@ class PrioritizedExperienceReplay(Memory):
     def __init__(self, alpha, size, *dimensions):
         self.alpha = alpha
         super(PrioritizedExperienceReplay, self).__init__(size, *dimensions)
-        self.priority = zeros([size], dtype=float)
+        self.priority = np.zeros([size], dtype=float)
 
     def _fill(self, p, *inputs):
         i = self.pointer
@@ -199,19 +216,19 @@ class PrioritizedExperienceReplay(Memory):
     def _sampleFromHalfFull(self, batch_size):
         try:
             p = self.priority[:self.pointer] / \
-                sum(self.priority[:self.pointer])
-            self.index = choice(self.pointer, batch_size, p=p)
+                np.sum(self.priority[:self.pointer])
+            self.index = np.choice(self.pointer, batch_size, p=p)
         except ValueError:
-            print('vals', self.sum, sum(self.priority))
+            print('vals', self.sum, np.sum(self.priority))
             raise
         return [m[self.index] for m in self.memory]
 
     def _sampleFromFull(self, batch_size):
         try:
-            self.index = choice(self.length, batch_size,
-                                p=self.priority / sum(self.priority))
+            self.index = np.choice(self.length, batch_size,
+                                   p=self.priority / np.sum(self.priority))
         except ValueError:
-            print('vals', self.sum, sum(self.priority))
+            print('vals', self.sum, np.sum(self.priority))
             raise
         return [m[self.index] for m in self.memory]
 
@@ -219,7 +236,7 @@ class PrioritizedExperienceReplay(Memory):
         return self.priority[self.index]
 
     def updatePriority(self, priorities):
-        self.priority[self.index] = power(priorities + 1e-7, .4)
+        self.priority[self.index] = np.power(priorities + 1e-7, .4)
 
 
 if __name__ == "__main__":
@@ -257,7 +274,19 @@ if __name__ == "__main__":
         b = np.all([m.memory[1][1][i] == 2 for i in range(3)])
         return a and b
 
+    def storeLoad():
+        m = Memory(5, (1, np.int32), (3, np.int32))
+        m.add(0, (1, 2, 3))
+        m.add(4, (5, 6, 7))
+        m.add(8, (9, 10, 11))
+        print(m)
+        print('--------------')
+        m.save('/tmp/memory_numpy_save_test')
+        m.load('/tmp/memory_numpy_save_test')
+        print(m)
+
     assert healthy_copy()
     assert healthy_get_batch_index()
     assert set_item()
     assert setter()
+    storeLoad()

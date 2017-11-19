@@ -38,10 +38,14 @@ def fanIn(shape, mean=0.):
                                          maxval=std + mean)
 
 
-def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=True):
+def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=True, return_param=False):
     assert type(name) == str
-    assert type(output_dims) == int
+    if type(output_dims) not in [int, np.int16, np.int32, np.int64]:
+        raise TypeError("The argument `output_dims` should be type `int`. "
+                        "The provided value %s is type %s" % (str(output_dims), type(output_dims)))
     assert type(bias) == bool
+
+    parameters = []
 
     if type(flow) in [list, tuple]:
         print("FULLY CONNECTING A LIST")
@@ -58,10 +62,10 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
         flow = flatten(flow)
         dimension = flow.get_shape().as_list()[-1]
 
-        if initializer is None:
+        if initializer is None or initializer == 'fanin':
             initializer = fanIn(dimension)
         elif initializer == 'xavier':
-            xavier_initializer()
+            initializer = xavier_initializer()
         elif type(initializer) in [int, float]:
             initializer = tf.random_uniform_initializer(minval=-initializer,
                                                         maxval=initializer)
@@ -69,7 +73,8 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
         weight = tf.get_variable(name + "_weights",
                                  shape=[dimension, output_dims],
                                  dtype=tf.float32,
-                                 initializer=fanIn(dimension))
+                                 initializer=initializer)
+        parameters.append(weight)
         print("Fully connected weight:", name +
               "_w", weight.get_shape().as_list())
         flow = tf.matmul(flow, weight)
@@ -78,28 +83,42 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
         bias = tf.get_variable(name + "_biases",
                                shape=[output_dims],
                                dtype=tf.float32,
-                               initializer=fanIn(dimension))
+                               initializer=initializer)
+        parameters.append(bias)
         flow += bias
 
     if activation is not None:
         flow = activation(flow, name=name + "_activated")
 
-    return flow, weight, bias
+    if return_param:
+        parameters = [flow] + parameters
+        return parameters
+    else:
+        return flow
 
 
 class Convolutional(object):
+
     def __init__(self):
         self.layers = []
+        self.layer_dims = []
+        self.generated = []
         self.vars = []
+        self.deconv_vars = []
 
-    def addConv(self, depth, patch_size, stride):
+    def add(self, depth, patch_size, stride):
         if type(patch_size) == int:
             patch_size = [patch_size, patch_size]
+        else:
+            patch_size = list(patch_size)
         if type(stride) == int:
             stride = [stride, stride]
+        else:
+            stride = list(stride)
         self.layers.append((depth, patch_size, stride))
 
-    def model(self, flow):
+    def __call__(self, flow):
+        self.batch_size = tf.shape(flow)[0]
         previous_depth = flow.get_shape().as_list()[-1]
         for i, (depth, patch_size, stride) in enumerate(self.layers):
             shape = patch_size + [previous_depth, depth]
@@ -110,13 +129,72 @@ class Convolutional(object):
                                 shape=[depth],
                                 initializer=fanIn(shape))
             self.vars.append((w, b, stride))
+            self.generated.append([shape, stride])
             previous_depth = depth
         self.layers = []
 
         for w, b, stride in self.vars:
+            self.layer_dims.append(flow.get_shape().as_list())
             flow = tf.nn.conv2d(
                 flow, w, strides=[1, *stride, 1], padding='VALID')
             flow = tf.nn.relu(flow + b)
+
+        return flow
+
+    def transpose(self, flow, batch_size=None):
+        if batch_size is None:
+            batch_size = self.batch_size
+        # for i in range(len(self.depth)):
+        #     next_shape = [-(-self._shapes[i][0] // self.stride[0]), -
+        #                   (-self._shapes[i][1] // self.stride[1])]
+        #     self._shapes.append(next_shape)
+
+        flow_shape = flow.get_shape().as_list()
+        # assert self.layer_dims[-1] == flow_shape, "%s,%s do not match" % (
+        #     self.layer_dims[-1], flow_shape)
+
+        print(self.generated)
+        print(list(zip(self.generated, self.layer_dims)))
+        layer_info = reversed(list(zip(self.generated, self.layer_dims)))
+        for i, ((shape, stride), dims) in enumerate(layer_info):
+            # if i == len(self.generated)-1:
+            #     shape[3] = flow_shape[3]
+
+            w = tf.get_variable("deconv_w_%i" % i, shape=shape)
+            b = tf.get_variable("deconv_b_%i" % i, shape=shape[2])
+            self.deconv_vars.append((w, b, stride, dims))
+
+        for i, (w, b, stride, dims) in enumerate(self.deconv_vars):
+            print(flow)
+            print(w)
+            print(dims)
+            dims[0] = batch_size
+            flow = tf.nn.conv2d_transpose(flow, w, output_shape=dims, strides=[1, *stride, 1], padding="VALID")
+            if i < len(self.deconv_vars) - 1:
+                flow = tf.nn.relu(flow + b)
+            print('---------')
+
+        return flow
+
+        self._shapes = list(reversed(self._shapes))
+        deconv_params = []
+        for i in range(len(self.depth[:-1])):
+            w = tf.get_variable("deconv_weight_%i" % i, shape=self.patch + [
+                self.depth[i], self.depth[i + 1]], initializer=self.initializer, dtype=tf.float32)
+            b = tf.Variable(tf.constant(.01, shape=[self.depth[i]]))
+            deconv_params.append((w, b))
+        deconv_params = list(reversed(deconv_params))
+        shape = flow.get_shape().as_list()
+        batch_size, height, width, self.depth = shape
+        batch_size = tf.shape(flow)[0]
+        for i, p in enumerate(deconv_params):
+            w, b = p
+            next_depth, depth = w.get_shape().as_list()[-2:]
+            height, width = self._shapes[i + 2]
+
+            flow = tf.nn.conv2d_transpose(flow, w, strides=[1] + self.stride + [1], output_shape=[
+                                          batch_size, height, width, next_depth], padding="SAME")
+            flow = self.activation(flow)
 
         return flow
 

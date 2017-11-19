@@ -1,6 +1,14 @@
 import tensorflow as tf
 
 
+def paramterCount(var_list=None):
+    import numpy as np
+    if var_list is None:
+        var_list = tf.trainable_variables()
+
+    return np.sum([np.prod(v.shape) for v in var_list])
+
+
 def selectFromRows(tensor, indexes):
     row = tf.range(tf.shape(indexes)[0])
     return tf.gather_nd(tensor, tf.stack([row, indexes], axis=1))
@@ -95,8 +103,8 @@ def copyScopeVars(from_scope, to_scope, tau=None):
             new_value = tf.multiply(
                 from_list[i], tau) + tf.multiply(target_list[i], (1 - tau))
         else:
-            print(from_list[i].name, '->', target_list[i].name,
-                  from_list[i].get_shape().as_list())
+            print(from_list[i].name, from_list[i].get_shape().as_list(), '->', target_list[i].name,
+                  target_list[i].get_shape().as_list())
             new_value = from_list[i]
 
         operations.append(target_list[i].assign(new_value))
