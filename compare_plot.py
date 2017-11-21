@@ -1,18 +1,24 @@
 import matplotlib.pyplot as plt
-from numpy import average, std, arange, cumsum, concatenate
-
-
-def errorPlot(array_list):
-    avg = average(array_list, axis=0)
-    covar = std(array_list, axis=0)
-
-    base_line = plt.plot(avg)
-    color = base_line[0].get_color()
-    upper = avg + covar
-    lower = avg - covar
-    plt.fill_between(arange(0, len(avg)), upper, lower, color=color, alpha=.2)
-
+from numpy import average, arange, cumsum, concatenate
+from numpy import std as _std
 import numpy as np
+
+
+def errorPlot(array_list, axis=0, std=True, label='', fill=False):
+    avg = average(array_list, axis=axis)
+    if std:
+        covar = _std(array_list, axis=axis)
+        upper = avg + covar
+        lower = avg - covar
+    else:
+        upper = np.max(array_list, axis=axis)
+        lower = np.min(array_list, axis=axis)
+
+    base_line = plt.plot(avg, linewidth=3, label=label)
+    color = base_line[0].get_color()
+    plt.fill_between(arange(0, len(avg)), upper, lower, color=color, alpha=.05)
+    plt.plot(upper, color=color, alpha=.5)
+    plt.plot(lower, color=color, alpha=.5)
 
 
 def runningAverage(data, look_around):
