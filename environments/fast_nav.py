@@ -111,9 +111,6 @@ class Object(object):
             self.velocity *= self.bounce_coef
         return self.pose
 
-    def bounce(self):
-        self.velocity *= self.bounce_coef
-
 
 class MultiDimObject(Object):
 
@@ -132,7 +129,7 @@ class MultiDimObject(Object):
 
 class Simple(object):
 
-    def __init__(self, height, width, obs_length, etype='random'):
+    def __init__(self, height, width, obs_length, etype='empty'):
         self.height = height
         self.width = width
 
@@ -140,24 +137,30 @@ class Simple(object):
             self.area = np.random.randint(10, 60, size=(height, width))
             self.area[self.area == 10] = 1
             self.area[self.area > 10] = 0
+        elif etype == 'empty':
+            self.area = np.zeros((height, width))
+
         elif etype == 'obs':
             self.area = np.Ones(size=(height, width))
 
         self.obs = np.zeros(shape=(1 + 2 * obs_length, 1 + 2 * obs_length))
         self.obs_length = obs_length
 
-        self.target = randomPose(height, width)
-        space = 5
-        while self._check_around(self.target, space):
-            self.target = randomPose(height, width)
+        # self.env_plot = Figure()
+        # self.env_plot.imshow(self.area, vmin=0, vmax=5)
+        # self.agent_view = Figure()
+        # self.agent = MultiDimObject(self.pose)
+
+    def reset(self):
+        self.pose = randomPose(self.height, self.width)# * 0 + 10
+
+        self.target = randomPose(self.height, self.width)# * 0 + [25, 25]
+        # space = 5
+        # while self._check_around(self.target, space):
+        #     self.target = randomPose(self.height, self.width)
 
         self.area[self.target[0], self.target[1]] = 4
-        self.env_plot = Figure()
-        self.env_plot.imshow(self.area)
-        self.agent_view = Figure()
 
-        self.pose = randomPose(height, width)
-        self.agent = MultiDimObject(self.pose)
         self.terminal = False
 
     def _check_around(self, pose, space):
@@ -172,55 +175,76 @@ class Simple(object):
         angle = np.arctan2(diff[0], diff[1])
         return distance, np.sin(angle), np.cos(angle)
 
+    def getState(self):
+        diff = self.target - self.pose
+        distance = np.linalg.norm(diff)
+        angle = np.arctan2(diff[0], diff[1])
+        return np.array([*self.pose, *self.target])
+
     def observe(self):
         self.obs[:] = 1
-        top = self.pose[0] - self.obs_length
-        top = max(0, self.pose[0] - self.obs_length)
-        left = max(0, self.pose[1] - self.obs_length)
-        view = self.area[top: self.pose[0] + self.obs_length + 1,
-                         left: self.pose[1] + self.obs_length + 1]
-        top = max(0, self.obs_length - self.pose[0])
-        left = max(0, self.obs_length - self.pose[1])
+        y, x = round(self.pose[0]), round(self.pose[1])
+        top = y - self.obs_length
+        top = max(0, y - self.obs_length)
+        left = max(0, x - self.obs_length)
+        view = self.area[top: y + self.obs_length + 1,
+                         left: x + self.obs_length + 1]
+        top = max(0, self.obs_length - y)
+        left = max(0, self.obs_length - x)
         self.obs[top:top + view.shape[0],
                  left:left + view.shape[1]] = view
         return self.obs
 
     def plot(self):
-        self.env_plot.imshow(self.area)
+        self.env_plot.imshow(self.area, vmin=0, vmax=5)
         self.env_plot.plot(self.pose[1], self.pose[0], 'o')  # pose[1] -> x
 
     def plotObservation(self):
-        self.agent_view.imshow(self.obs)
+        self.agent_view.imshow(self.obs, vmin=0, vmax=4)
 
-    def act(self, up, right):
-        y, x = self.agent.force((up, right))
-        self.pose[0] = int(y)
-        self.pose[1] = int(x)
+    def step(self, up, right):
+        self.pose[:] = self.agent.force((up, right))
+        # self.pose[0] = int(y)
+        # self.pose[1] = int(x)
 
         self.terminal = self._crashed()
 
     def _crashed(self):
-        t = (self.height <= self.pose[0] < 0) or (
-            self.width <= self.pose[1] < 0)
-        if t:
-            return True
+        y, x = round(self.pose[0]), round(self.pose[1])
+        # or self.area[y, x] > 0
+        return self.height <= y or y < 0 or self.width <= x or x < 0
+
+
+class Discrete(Simple):
+
+    def step(self, action):
+        if action == 0:
+            self.pose[0] += 1
+        elif action == 1:
+            self.pose[0] -= 1
+        elif action == 2:
+            self.pose[1] += 1
+        elif action == 3:
+            self.pose[1] -= 1
         else:
-            return self.area[self.pose[0], self.pose[1]] > 0
+            raise ValeError("Undefined action %i" % action)
+        self.terminal = self._crashed()
 
 
 if __name__ == "__main__":
     plt.ion()
-    env = Simple(50, 70, 10)
+    env = Discrete(50, 70, 10, "empty")
+    env.reset()
     env.plot()
     terminal = False
     while not terminal:
-        up, right = np.random.randn(2)
-        env.act(up, right)
-        obs = env.observe()
+        env.step(np.random.randint(4))
+        # obs = env.observe()
+        print(env.getPose())
         terminal = env.terminal
         env.plot()
-        env.plotObservation()
+        # env.plotObservation()
         # sleep(.05)
-    # sleep(10)
+    sleep(100)
     # print(env.getPose())
     # sleep(10)

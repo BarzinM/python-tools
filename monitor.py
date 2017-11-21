@@ -10,20 +10,21 @@ class Figure(object):
         self.fig, self.ax = plt.subplots(1, 1)
         # self.handle = None
 
-    def imshow(self, value):
-        self.img_handle = self.ax.imshow(value, origin='lower', cmap='gray')
+    def imshow(self, value, *args, **kwargs):
+        self.img_handle = self.ax.imshow(
+            value, origin='lower', cmap='gray', *args, **kwargs)
         self.fig.canvas.draw()
         self.imshow = self._udpate_image
 
-    def _udpate_image(self, value):
+    def _udpate_image(self, value, *args, **kwargs):
         self.img_handle.set_data(value)
         self.fig.canvas.draw()
 
-    def plot(self, x, y, *args):
-        self.plot_handle = self.ax.plot(x, y, *args)[0]
+    def plot(self, x, y, *args, **kwargs):
+        self.plot_handle = self.ax.plot(x, y, *args, **kwargs)[0]
         self.plot = self._update_plot
 
-    def _update_plot(self, x, y, *args):
+    def _update_plot(self, x, y, *args, **kwargs):
         self.plot_handle.set_data(x, y)
 
 
