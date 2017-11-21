@@ -1,11 +1,58 @@
 import os
 import shutil
 import inspect
+import glob
+import __main__
 
 
-def mkd(path):
-    if not os.path.exists(path):
+def tailNumber(text):
+    st = ""
+    for c in text[::-1]:
+        if c.isdigit():
+            st = c + st
+        else:
+            break
+    return st, text[:-len(st)]
+
+
+def incrementName(path):
+    number, raw_name = tailNumber(path)
+    if len(number):
+        new_name = raw_name + str(int(number) + 1)
+    else:
+        new_name = path + '_0'
+    return new_name
+
+
+def mainFileName(full=False):
+    path = __main__.__file__
+    path = os.path.split(path)[1]
+    if not full:
+        path = os.path.splitext(path)[0]
+    return path
+
+
+def mainFilePath():
+    import __main__
+    return os.path.split(__main__.__file__)[0]
+
+
+def mkd(path, increment=True):
+    if path[-1] == '/':
+        path = path[:-1]
+
+    if increment:
+        temp_path = path
+        i = 0
+        while os.path.exists(temp_path) and len(os.listdir(temp_path)) > 0:
+            # path = incrementName(path + path_2)
+            temp_path = path + "_%i" % i
+            i += 1
+        path = temp_path
+        mkd(path, increment=False)
+    elif not os.path.exists(path):
         os.makedirs(path)
+    return path
 
 
 def rmd(path):
@@ -22,5 +69,10 @@ def here():
     return os.path.dirname(os.path.realpath(module.__file__))
 
 
+def ls(dir, extention='*.*'):
+    return glob.glob(os.path.join(dir, extention))
+
+
 if __name__ == "__main__":
-    here()
+    print(here())
+    print(ls(here()))

@@ -1,19 +1,42 @@
 import tensorflow as tf
 from sys import stdout
-import os
-import shutil
-import __main__
+from filesystem import mainFileName, mkd
+import matplotlib.pyplot as plt
+
+
+class Figure(object):
+
+    def __init__(self):
+        self.fig, self.ax = plt.subplots(1, 1)
+        # self.handle = None
+
+    def imshow(self, value, *args, **kwargs):
+        self.img_handle = self.ax.imshow(
+            value, origin='lower', cmap='gray', *args, **kwargs)
+        self.fig.canvas.draw()
+        self.imshow = self._udpate_image
+
+    def _udpate_image(self, value, *args, **kwargs):
+        self.img_handle.set_data(value)
+        self.fig.canvas.draw()
+
+    def plot(self, x, y, *args, **kwargs):
+        self.plot_handle = self.ax.plot(x, y, *args, **kwargs)[0]
+        self.plot = self._update_plot
+
+    def _update_plot(self, x, y, *args, **kwargs):
+        self.plot_handle.set_data(x, y)
 
 
 class Monitor(object):
+
     def __init__(self, path=None, sub='', session=None, verbose=True):
         if path is None:
-            path = 'results/' + __main__.__file__[:-3]
-        path = path + '/' + sub
-        if os.path.isdir(path):
-            shutil.rmtree(path)
+            path = mainFileName()
+        path = 'summary/' + path + '/' + sub
+        path = mkd(path)
         if verbose:
-            print("Saving monitor files to", path)
+            print("[INFO] Monitor object message: Saving monitor files to", path)
         if session is None:
             self.writer = tf.summary.FileWriter(path)
         else:
@@ -21,36 +44,58 @@ class Monitor(object):
         self.variables = {}
         self.strings = []
         self.iteration = 0
+        self.summaries = []
+        self.global_step = tf.train.get_or_create_global_step()
 
-    def merge(self, var):
-        self.variables[var] = 0.
-        return var
+    def scalar(self, iterable):
+        assert type(iterable) in [list, tuple, dict]
+        if type(iterable) in [list, tuple]:
+            iterable = {item.name: item for item in iterable}
+        for name, var in iterable.items():
+            if type(var) != tf.Variable:
+                var = tf.Variable(var, name=name)
+            self.summaries.append(tf.summary.scalar(name, var))
+        self.op = tf.summary.merge(self.summaries)
 
-    def addVar(self, name, initial=0.):
-        var = tf.Variable(initial, name=name)
-        self.strings.append(tf.summary.scalar(name, var))
-        self.variables[var] = initial
-        return var
+    def histogram(self, iterable):
+        if type(iterable) in [list, tuple]:
+            iterable = {item.name: item for item in iterable}
+        for name, var in iterable.items():
+            if type(var) != tf.Variable:
+                var = tf.Variable(var, name=name)
+            self.summaries.append(tf.summary.histogram(name, var))
+        self.op = tf.summary.merge(self.summaries)
 
-    def setup(self):
-        # self.op = tf.summary.merge(self.strings)
-        self.op = tf.summary.merge_all()
+    def update(self, session, dictionary={}, i=None):
+        availables = self.variables.keys()
+        new_d = {}
+        for name, value in dictionary.items():
+            if name not in availables:
+                var = tf.Variable(value, name=name)
+                self.variables[name] = var
+                self.summaries.append(
+                    tf.summary.scalar(name, self.variables[name]))
+                self.op = tf.summary.merge(self.summaries)
+            new_d[self.variables[name]] = value
 
-    def set(self, var, value):
-        self.variables[var] = value
+        # new_d = {self.variables[d]: dictionary[d] for d in dictionary.keys()}
 
-    def update(self, session, i=None):
-        summary = session.run(self.op, self.variables)
         if i is None:
-            self.iteration += 1
-            self.writer.add_summary(summary, self.iteration)
+            summary, step = session.run(
+                [self.op, self.global_step], feed_dict=new_d)
+            # self.iteration += 1
+            self.writer.add_summary(summary, step)
         else:
+            summary = session.run(self.op, feed_dict=new_d)
             self.writer.add_summary(summary, i)
+
         self.writer.flush()
 
 
 class Display(object):
+
     def __init__(self):
+        # rows, columns = subprocess.check_output(['stty', 'size']).decode().split()
         self.lines = 0
 
     def print(self, *args):
@@ -65,6 +110,59 @@ class Display(object):
         if seperator:
             print(seperator)
         self.lines = 0
+
+
+def breakLine(text, wrap=80):
+    if len(text) > wrap:
+        char = wrap
+        while char > 0 and text[char] != ' ':
+            char -= 1
+        if char:
+            text = [text[:char]] + breakLine(text[char + 1:], wrap)
+        else:
+            text = [text[:wrap - 1] + '-'] + breakLine(text[wrap - 1:], wrap)
+        return text
+    else:
+        return [cleanLine(text)]
+
+
+def cleanLine(text):
+    if text[-1] == ' ':
+        text = text[:-1]
+    elif text[0] == ' ':
+        text = text[1:]
+    else:
+        return text
+    return cleanLine(text)
+
+
+def boxPrint(text, wrap=0):
+    line_style = '-'
+    paragraph = text.split('\n')
+    if wrap > 0:
+        index = 0
+        while index < len(paragraph):
+            paragraph[index] = cleanLine(paragraph[index])
+            if len(paragraph[index]) > wrap:
+                paragraph = paragraph[:index] + \
+                    breakLine(paragraph[index], wrap) + paragraph[index + 1:]
+            index += 1
+
+    length = (max([len(line) for line in paragraph]))
+    print('+' + line_style * length + '+')
+    for line in paragraph:
+        print('|' + line + ' ' * (length - len(line)) + '|')
+    print('+' + line_style * length + '+')
+
+
+if __name__ == "__main__":
+    text = "Some text comes here to be printed in a box!!!"
+    boxPrint(text, 20)
+    text = "Title:\nBody lorem ipsum something body\ncheers,"
+    boxPrint(text, 20)
+    boxPrint(text)
+    text = "No Space:\nTextHasNoSpaceForWrappingWhichGetsBrokenUsingDashes"
+    boxPrint(text, 20)
 
 
 if __name__ == "__main__":

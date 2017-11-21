@@ -1,42 +1,126 @@
 import numpy as np
 import tensorflow as tf
-from approximators import fullyConnected, copyScopeVars, getScopeParameters, entropyLoss
-from memory import GeneralMemory
+from tfmisc import copyScopeVars, getScopeParameters, entropyLoss
+from networks import fullyConnected
+from memory import Memory
 from stats import RunningAverage
 from collections import deque
+
 
 class DQN(object):
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
-        self.state = tf.placeholder(tf.float32, [None, state_dim], "states")
+        if type(state_dim) == int:
+            self.state = tf.placeholder(
+                tf.float32, [None, state_dim], "states")
+        if type(state_dim) in [list, tuple]:
+            self.state = tf.placeholder(
+                tf.float32, [None] + list(state_dim), "states")
+
         self.action_ph = tf.placeholder(tf.int32, [None], "actions")
         self.action_value_ph = tf.placeholder(
             tf.float32, [None], "action_values")
-        self.memory = GeneralMemory(
-            memory_size, state_dim, 0, 1, state_dim, -1)
+        self.memory = Memory(
+            memory_size, (state_dim, np.float), (0, np.uint8), (0, float), (state_dim, np.float), (0, bool))
+        print("Memory Bytes:", self.memory.nbytes() / (1024**3))
 
-    def initialize(self, layer_dims=[100], optimizer=None):
-        def _make():
-            flow = self.state
+    def initialize(self, layer_dims, optimizer, learner_target_inputs=None):
+        def _make(flow):
             for i, size in enumerate(layer_dims):
-                flow = fullyConnected("layer%i" % i, flow, size, tf.nn.relu, initializer=.003)
+                flow = fullyConnected(
+                    "layer%i" % i, flow, size, tf.nn.relu)
+
+            return fullyConnected(
+                "output_layer", flow, self.action_dim)
+
+        learner_target_inputs = learner_target_inputs or [
+            self.state, self.state]
+        with tf.variable_scope('learner'):
+            self.action_value = _make(learner_target_inputs[0])
+        with tf.variable_scope('target'):
+            self.target_action_value = _make(learner_target_inputs[1])
+
+        row = tf.range(tf.shape(self.action_value)[0])
+        indexes = tf.stack([row, self.action_ph], axis=1)
+
+        updated = tf.Variable([], trainable=False, validate_shape=False)
+        updated = tf.assign(updated, self.action_value, validate_shape=False)
+        action_value = tf.scatter_nd_update(
+            updated, indexes, self.action_value_ph)
+
+        self._loss = tf.losses.huber_loss(
+            self.action_value, action_value)
+
+        self.policy_action = tf.argmax(self.action_value, axis=1)
+        self.update_op = copyScopeVars('learner', 'target')
+
+        self.train_op = optimizer.minimize(self._loss, var_list=getScopeParameters('learner'))
+
+    def train(self, session, batch=None, discount=.97):
+        states, actions, rewards, next_states, terminals = self.memory.sample(
+            batch)
+        next_state_value = session.run(
+            self.target_action_value, {self.state: next_states})
+        observed_value = rewards + (1. - terminals) * discount * \
+            np.max(next_state_value, 1)
+
+        return session.run([self._loss, self.train_op], {
+            self.state: states,
+            self.action_ph: actions,
+            self.action_value_ph: observed_value})[0]
+
+    def policy(self, session, state):
+        return session.run(self.policy_action, {self.state: [state]})[0]
+
+    def memorize(self, state, action, reward, next_state, terminal):
+        self.memory.add(state, action, reward, next_state, terminal)
+
+    def update(self, session):
+        session.run(self.update_op)
+
+
+class DQN2(object):
+
+    def __init__(self, state_dim, action_dim, memory_size):
+        self.action_dim = action_dim
+        if type(state_dim) == int:
+            self.state = tf.placeholder(
+                tf.float32, [None, state_dim], "states")
+        if type(state_dim) in [list, tuple]:
+            self.state = tf.placeholder(tf.float32, [None, *state_dim], "states")
+
+        self.action_ph = tf.placeholder(tf.int32, [None], "actions")
+        self.action_value_ph = tf.placeholder(
+            tf.float32, [None], "action_values")
+        self.memory = Memory(
+            memory_size, (state_dim, np.float), (0, np.uint8), (0, float), (state_dim, np.float), (0, bool))
+
+    def initialize(self, layer_dims, optimizer, learner_target_inputs=None):
+        def _make(flow):
+            for i, size in enumerate(layer_dims):
+                flow = fullyConnected(
+                    "layer%i" % i, flow, size, tf.nn.relu, initializer=.003)
 
             return fullyConnected(
                 "output_layer", flow, self.action_dim, initializer=.003)
 
+        learner_target_inputs = learner_target_inputs or [
+            self.state, self.state]
         with tf.variable_scope('learner'):
-            self.action_value = _make()
+            self.action_value = _make(learner_target_inputs[0])
         with tf.variable_scope('target'):
-            self.target_action_value = _make()
+            self.target_action_value = _make(learner_target_inputs[1])
 
+        self.policy_action = tf.argmax(self.action_value, axis=1)
         self.update_op = copyScopeVars('learner', 'target')
 
         row = tf.range(0, tf.shape(self.action_value)[0])
         indexes = tf.stack([row, self.action_ph], axis=1)
         action_value = tf.gather_nd(self.action_value, indexes)
 
-        self.single_loss = tf.square(action_value - self.action_value_ph)
-        self._loss = tf.reduce_mean(self.single_loss)
+        # self.single_loss = tf.square(action_value - self.action_value_ph)
+        # self._loss = tf.reduce_mean(self.single_loss)
+        self._loss = tf.losses.huber_loss(self.action_value_ph, action_value)
 
         self.train_op = optimizer.minimize(self._loss)
 
@@ -46,15 +130,15 @@ class DQN(object):
         next_state_value = session.run(
             self.target_action_value, {self.state: next_states})
         observed_value = rewards + discount * \
-            np.max(next_state_value, 1, keepdims=True)
-        observed_value[terminals] = rewards[terminals] / (1 - discount)
+            np.max(next_state_value, 1)
+        observed_value[terminals] = rewards[terminals]
 
         _, l = session.run([self.train_op, self._loss], {
-            self.state: states, self.action_ph: actions, self.action_value_ph: observed_value[:, 0]})
+            self.state: states, self.action_ph: actions, self.action_value_ph: observed_value})
         return l
 
     def policy(self, session, state):
-        return session.run(self.action_value, {self.state: [state]})[0]
+        return session.run(self.policy_action, {self.state: [state]})[0]
 
     def memorize(self, state, action, reward, next_state, terminal):
         self.memory.add(state, action, reward, next_state, terminal)
@@ -64,6 +148,7 @@ class DQN(object):
 
 
 class DuelingDQN(DQN):
+
     def initialize(self, layer_dims=[100], optimizer=None):
         def _make():
             flow = self.state
@@ -94,24 +179,20 @@ class DuelingDQN(DQN):
 
 
 class DoubleDQN(DQN):
+
     def train(self, session, batch=None, discount=.97):
         states, actions, rewards, next_states, terminals = self.memory.sample(
             batch)
-        action_value = session.run(
-            self.action_value, {self.state: states})
+        target_av, action_value = session.run(
+            [self.target_action_value, self.action_value], {self.state: next_states})
         next_action = np.argmax(action_value, axis=1)
-        next_state_value = session.run(
-            self.target_action_value, {self.state: next_states})
-        observed_value = rewards + \
-            np.expand_dims(
-                discount * next_state_value[np.arange(batch), next_action], -1)
-        observed_value[terminals] = rewards[terminals] / (1 - discount)
-        action_value[np.arange(batch), actions] = observed_value[:, 0]
+        observed_value = rewards[:, 0] + discount * \
+            target_av[np.arange(batch), next_action]
+        observed_value[terminals] = rewards[terminals, 0]
 
         _, l = session.run([self.train_op, self._loss], {
-            self.state: states, self.action_ph: action_value})
+            self.state: states, self.action_value_ph: observed_value})
         return l
-
 
 
 class DoubleDuelingDQN(DuelingDQN, DoubleDQN):
@@ -119,15 +200,16 @@ class DoubleDuelingDQN(DuelingDQN, DoubleDQN):
 
 
 class ExpDQN(object):
+
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
         self.state = tf.placeholder(tf.float32, [None, state_dim])
         self.action_ph = tf.placeholder(tf.int32, [None])
         self.action_value_ph = tf.placeholder(tf.float32, [None])
 
-        self.memory = GeneralMemory(
+        self.memory = Memory(
             memory_size, state_dim, 0, 1, state_dim, -1)
-        self.com_memory = GeneralMemory(
+        self.com_memory = Memory(
             memory_size, state_dim, 0, 1, state_dim, -1)
 
         self.com_average = RunningAverage(.001)
@@ -169,7 +251,7 @@ class ExpDQN(object):
             self.target_action_value, {self.state: next_states})
         observed_value = rewards + discount * \
             np.max(next_state_value, 1, keepdims=True)
-        observed_value[terminals] = rewards[terminals] / (1 - discount)
+        observed_value[terminals] = rewards[terminals]
         return states, actions, observed_value[:, 0]
 
     def train(self, session, batch=None, discount=.97, p=False):
@@ -228,15 +310,16 @@ class ExpDQN(object):
 
 
 class ExpDQN2(object):
+
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
         self.state = tf.placeholder(tf.float32, [None, state_dim], "states")
         self.action_ph = tf.placeholder(tf.int32, [None], "actions")
         self.action_value_ph = tf.placeholder(
             tf.float32, [None], "action_values")
-        self.memory = GeneralMemory(
+        self.memory = Memory(
             memory_size, state_dim, 0, 1, state_dim, -1)
-        self.com_memory = GeneralMemory(
+        self.com_memory = Memory(
             memory_size, state_dim, 0, 1, state_dim, -1)
 
         self.com_avg = RunningAverage(.001, 1.)
@@ -283,7 +366,7 @@ class ExpDQN2(object):
             self.target_action_value, {self.state: next_states})
         observed_value = rewards + discount * \
             np.max(next_state_value, 1, keepdims=True)
-        observed_value[terminals] = rewards[terminals] / (1 - discount)
+        observed_value[terminals] = rewards[terminals]
 
         try:
             states2, actions2, rewards2, next_states2, terminals2 = self.com_memory.sample(
@@ -292,7 +375,7 @@ class ExpDQN2(object):
                 self.target_action_value, {self.state: next_states2})
             observed_value2 = rewards2 + discount * \
                 np.max(next_state_value2, 1, keepdims=True)
-            observed_value2[terminals2] = rewards2[terminals2] / (1 - discount)
+            observed_value2[terminals2] = rewards2[terminals2]
 
             states = np.concatenate((states, states2), 0)
             actions = np.concatenate((actions, actions2), 0)
