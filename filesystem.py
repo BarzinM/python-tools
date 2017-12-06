@@ -5,6 +5,20 @@ import glob
 import __main__
 
 
+class FileReport(object):
+
+    def __init__(self, file_name):
+        self.file_name = file_name
+        self.handle = open(file_name, 'w', 1)
+
+    def add(self, *args):
+        text = '{} ' * len(args) + '\n'
+        self.handle.write(text.format(*args))
+
+    def close(self):
+        close(self.handle)
+
+
 def tailNumber(text):
     st = ""
     for c in text[::-1]:

@@ -99,7 +99,9 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
 
 class Convolutional(object):
 
-    def __init__(self):
+    def __init__(self, max_pool=False):
+        self.max_pool = max_pool
+        self.padding = 'VALID'
         self.layers = []
         self.layer_dims = []
         self.generated = []
@@ -117,7 +119,7 @@ class Convolutional(object):
             stride = list(stride)
         self.layers.append((depth, patch_size, stride))
 
-    def __call__(self, flow):
+    def __call__(self, flow, dropout= None):
         self.batch_size = tf.shape(flow)[0]
         previous_depth = flow.get_shape().as_list()[-1]
         for i, (depth, patch_size, stride) in enumerate(self.layers):
@@ -135,9 +137,22 @@ class Convolutional(object):
 
         for w, b, stride in self.vars:
             self.layer_dims.append(flow.get_shape().as_list())
-            flow = tf.nn.conv2d(
-                flow, w, strides=[1, *stride, 1], padding='VALID')
+
+            stride = [1, *stride, 1]
+
+            if self.max_pool:
+                flow = tf.nn.conv2d(
+                    flow, w, strides=[1, 1, 1, 1], padding=self.padding)
+                flow = tf.nn.max_pool(
+                    flow, stride, stride, padding=self.padding)
+            else:
+                flow = tf.nn.conv2d(flow, w, strides=stride,
+                                    padding=self.padding)
+
             flow = tf.nn.relu(flow + b)
+
+            if dropout is not None:
+                flow = tf.nn.dropout(flow, keep_prob=dropout)
 
         return flow
 
