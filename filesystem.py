@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import inspect
 import glob
@@ -73,6 +74,35 @@ def ls(dir, extention='*.*'):
     return glob.glob(os.path.join(dir, extention))
 
 
+class Arguments(object):
+    def __init__(self):
+        self.flags = {}
+        self.options = {}
+
+    def flag(self, *args, **kwargs):
+        self.flag.update(kwargs)
+        for arg in args:
+            self.flags[arg] = False
+
+    def options(self, *args, **kwargs):
+        self.options.update(kwargs)
+        for arg in args:
+            self.options[arg] = 0
+
+    def parse(self):
+        self.argv = sys.argv[1:]
+
+    def __call__(self, arg):
+        if arg in self.options:
+            return self.options[arg]
+        elif arg in self.flags:
+            return self.flags[arg]
+
+
 if __name__ == "__main__":
-    print(here())
-    print(ls(here()))
+    # print(here())
+    # print(ls(here()))
+    a = Arguments()
+    a.flag('verbose')
+    print(a.flags)
+    a.parse()
