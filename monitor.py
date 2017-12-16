@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 class Figure(object):
 
     def __init__(self):
+        plt.ion()
         self.fig, self.ax = plt.subplots(1, 1)
         # self.handle = None
 
@@ -22,13 +23,23 @@ class Figure(object):
 
     def plot(self, x, y, *args, **kwargs):
         self.plot_handle = self.ax.plot(x, y, *args, **kwargs)[0]
+        self.fig.canvas.draw()
         self.plot = self._update_plot
 
     def _update_plot(self, x, y, *args, **kwargs):
         self.plot_handle.set_data(x, y)
+        self.fig.canvas.draw()
+
+    def setLimit(self, y_limits=None, x_limits=None):
+        if x_limits is not None:
+            assert len(x_limits) == 2
+            self.ax.set_xlim(x_limits)
+        if y_limits is not None:
+            assert len(y_limits) == 2
+            self.ax.set_ylim(y_limits)
 
 
-class Monitor(object):
+class Tensorboard(object):
 
     def __init__(self, path=None, sub='', session=None, verbose=True):
         if path is None:
@@ -36,7 +47,7 @@ class Monitor(object):
         path = 'summary/' + path + '/' + sub
         path = mkd(path)
         if verbose:
-            print("[INFO] Monitor object message: Saving monitor files to", path)
+            print("[INFO] Tensorboard object message: Saving monitor files to", path)
         if session is None:
             self.writer = tf.summary.FileWriter(path)
         else:
@@ -45,48 +56,55 @@ class Monitor(object):
         self.strings = []
         self.iteration = 0
         self.summaries = []
-        self.global_step = tf.train.get_or_create_global_step()
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            self.init = tf.global_variables_initializer()
+
+        self.session = tf.Session(graph=self.graph)
+        self.session.run(self.init)
 
     def scalar(self, iterable):
         assert type(iterable) in [list, tuple, dict]
         if type(iterable) in [list, tuple]:
             iterable = {item.name: item for item in iterable}
-        for name, var in iterable.items():
-            if type(var) != tf.Variable:
-                var = tf.Variable(var, name=name)
-            self.summaries.append(tf.summary.scalar(name, var))
-        self.op = tf.summary.merge(self.summaries)
+        with self.graph.as_default():
+            for name, var in iterable.items():
+                if type(var) != tf.Variable:
+                    var = tf.Variable(var, name=name)
+                self.summaries.append(tf.summary.scalar(name, var))
+            self.op = tf.summary.merge(self.summaries)
 
     def histogram(self, iterable):
         if type(iterable) in [list, tuple]:
             iterable = {item.name: item for item in iterable}
-        for name, var in iterable.items():
-            if type(var) != tf.Variable:
-                var = tf.Variable(var, name=name)
-            self.summaries.append(tf.summary.histogram(name, var))
-        self.op = tf.summary.merge(self.summaries)
+        with self.graph.as_default():
+            for name, var in iterable.items():
+                if type(var) != tf.Variable:
+                    var = tf.Variable(var, name=name)
+                self.summaries.append(tf.summary.histogram(name, var))
+            self.op = tf.summary.merge(self.summaries)
 
-    def update(self, session, dictionary={}, i=None):
+    def update(self, dictionary={}, i=None):
         availables = self.variables.keys()
         new_d = {}
-        for name, value in dictionary.items():
-            if name not in availables:
-                var = tf.Variable(value, name=name)
-                self.variables[name] = var
-                self.summaries.append(
-                    tf.summary.scalar(name, self.variables[name]))
-                self.op = tf.summary.merge(self.summaries)
-            new_d[self.variables[name]] = value
+        with self.graph.as_default():
+            for name, value in dictionary.items():
+                if name not in availables:
+                    var = tf.Variable(value, name=name)
+                    self.variables[name] = var
+                    self.summaries.append(
+                        tf.summary.scalar(name, self.variables[name]))
+                    self.op = tf.summary.merge(self.summaries)
+                new_d[self.variables[name]] = value
 
         # new_d = {self.variables[d]: dictionary[d] for d in dictionary.keys()}
 
         if i is None:
-            summary, step = session.run(
-                [self.op, self.global_step], feed_dict=new_d)
-            # self.iteration += 1
-            self.writer.add_summary(summary, step)
+            summary = self.session.run(self.op, feed_dict=new_d)
+            self.writer.add_summary(summary, self.iteration)
+            self.iteration += 1
         else:
-            summary = session.run(self.op, feed_dict=new_d)
+            summary = self.session.run(self.op, feed_dict=new_d)
             self.writer.add_summary(summary, i)
 
         self.writer.flush()

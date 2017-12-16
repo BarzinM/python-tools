@@ -1,4 +1,5 @@
 import numpy as np
+from collections import deque
 
 
 class Buffer(object):
@@ -51,7 +52,8 @@ class Buffer(object):
 class Memory(object):
 
     def __init__(self, size, *dimensions):
-        assert type(size) == int
+        assert type(size) == int, "Argument `size` should have type `int`. %s, %s" % (
+            size, type(size))
         self.memory = []
         for dim, t in dimensions:
             if type(dim) in [tuple, list]:
@@ -75,15 +77,21 @@ class Memory(object):
         import os
         if os.path.exists(path + '.npz'):
             raise FileExistsError("file with this name already exists")
-        dictionary = {'%i' % i: self.memory[i][:len(self)]
+        self.fit()
+        dictionary = {'%i' % i: self.memory[i]
                       for i in range(len(self.memory))}
         np.savez(path, **dictionary)
+
+    def fit(self):
+        l = len(self)
+        for i in range(len(self.memory)):
+            self.memory[i] = self.memory[i][:l]
 
     def load(self, path):
         if path[-4:] != '.npz':
             path += '.npz'
         dictionary = np.load(path)
-        
+
         assert self.max_length >= dictionary['0'].shape[0]
 
         self.addBatch(*[dictionary['%i' % i]
@@ -117,6 +125,18 @@ class Memory(object):
             self._switch()
         self.added += 1
 
+    def _update(self, *inputs):
+        self.added += 1
+        i = self.pointer
+        for b, m in enumerate(inputs):
+            self.memory[b][i] = m
+        self.pointer = (i + 1) % self.max_length
+
+    def _switch(self):
+        self.pointer = 0
+        self.filled = True
+        self.add = self._update
+
     def addBatch(self, *inputs):
         length = len(inputs[0])
         self.length = max(self.length, min(
@@ -137,18 +157,6 @@ class Memory(object):
             pointer = (pointer + batch_length) % self.max_length
 
         self.pointer = pointer
-
-    def _switch(self):
-        self.pointer = 0
-        self.filled = True
-        self.add = self._update
-
-    def _update(self, *inputs):
-        self.added += 1
-        i = self.pointer
-        for b, m in enumerate(inputs):
-            self.memory[b][i] = m
-        self.pointer = (i + 1) % self.max_length
 
     def getBatchIndex(self):
         return self.index
@@ -188,6 +196,77 @@ class Memory(object):
             raise ValueError
 
         return np.sum([a.nbytes for a in self.memory]) / c
+
+
+class ContinuousMemory(Memory):
+
+    def __init__(self, memory_size, state_structure, action_structure, reward_type=np.float32):
+        super().__init__(
+            memory_size,
+            (0, np.int32),
+            state_structure,
+            action_structure,
+            (0, reward_type),
+            (0, np.bool),
+        )
+        self.arg_count = 4  # TODO: support nested state structure
+        self.exp_counter = 0
+
+    def _fill(self, *inputs):
+        if len(inputs) < self.arg_count:
+            self.cut()
+        i = self.pointer
+        for b, m in enumerate([self.exp_counter, *inputs]):
+            self.memory[b][i] = m
+        self.pointer = (i + 1)
+        self.length = (i + 1)
+        if (i + 1) == self.max_length:
+            self._switch()
+        self.added += 1
+        self.exp_counter += 1
+
+    def _update(self, *inputs):
+        if len(inputs) < self.arg_count:
+            self.cut()
+        self.added += 1
+        i = self.pointer
+        for b, m in enumerate([self.exp_counter, *inputs]):
+            self.memory[b][i] = m
+        self.pointer = (i + 1) % self.max_length
+        self.exp_counter += 1
+
+    def cut(self):
+        self.exp_counter += 1
+
+    def sample(self, batch_size, length=1):
+        exps = [super().sample(batch_size)]
+        exps += [self.next() for _ in range(length)]
+        seq = exps[-1][0] - exps[0][0] == length
+        # print(exps)
+
+        state = [e[1][seq] for e in exps]
+        action = exps[-1][-3][seq]
+        reward = exps[-1][-2][seq]
+        terminal = exps[-1][-1][seq]
+
+        return state, action, reward, terminal
+
+
+class EpisodicMemory(object):
+
+    def __init__(self, memory_size):
+        self.episodes = []
+        self.count = 0
+        self.episodes_size = memory_size
+
+    def add(self, trajectory, lenght=0):
+        self.episodes.append(trajectory)
+        self.count += (length or len(trajectory))
+        if self.count > self.episodes_size:
+            self.episodes = self.episodes[1:]
+
+    def sample(self):
+        return self.episodes[np.random.randint(len(self.episodes))]
 
 
 class PrioritizedExperienceReplay(Memory):
@@ -285,8 +364,15 @@ if __name__ == "__main__":
         m.load('/tmp/memory_numpy_save_test')
         print(m)
 
-    assert healthy_copy()
-    assert healthy_get_batch_index()
-    assert set_item()
-    assert setter()
-    storeLoad()
+    # assert healthy_copy()
+    # assert healthy_get_batch_index()
+    # assert set_item()
+    # assert setter()
+    # storeLoad()
+
+    m = ContinuousMemory(10, (2, np.int8), (0, np.float))
+    m.add([3, 4])
+    m.add([2, 3], 3, 1, False)
+    m.add([4, 5], 1, 1, True)
+    print(m)
+    print(m.sample(5))

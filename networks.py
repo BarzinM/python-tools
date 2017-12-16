@@ -14,14 +14,14 @@ def normalizeBatch(x, is_training, name):
                       scope=name)
 
 
-def flatten(tensor):
+def flat(tensor, batch_size=-1):
     shape = tensor.get_shape().as_list()
     if len(shape) == 2:
         return tensor
     flat_size = np.prod(shape[1:], dtype=np.int32)
     print("Flatting tensor %s from %s to %s" %
           (tensor.name, str(shape), str([shape[0], flat_size])))
-    return tf.reshape(tensor, [-1, flat_size])
+    return tf.reshape(tensor, [batch_size, flat_size])
 
 
 def fanInStd(shape):
@@ -36,6 +36,126 @@ def fanIn(shape, mean=0.):
     std = fanInStd(shape)
     return tf.random_uniform_initializer(minval=-std + mean,
                                          maxval=std + mean)
+
+
+class VAE(object):
+
+    def __init__(self, dimension):
+        self.dimension = dimension
+
+    def __call__(self, flow):
+        self.mu = fullyConnected("mu", flow, self.dimension, None)
+        self.logvar = fullyConnected("logvar", flow, self.dimension, None)
+        std = tf.exp(.5 * self.logvar)
+
+        epsilon = tf.random_normal(tf.shape(self.mu), name="epsilon")
+        latent = self.mu + tf.multiply(std, epsilon)
+
+        self.loss = .5 * \
+            tf.reduce_sum(tf.exp(self.logvar) +
+                          tf.square(self.mu) - 1. - self.logvar, 1)
+
+        return latent
+
+
+def latent(flow, dimension):
+    mu = fullyConnected("mu", flow, dimension, None)
+    logvar = fullyConnected("logvar", flow, dimension, None)
+    std = tf.exp(.5 * logvar)
+
+    epsilon = tf.random_normal(tf.shape(mu), name="epsilon")
+    latent = mu + tf.multiply(std, epsilon)
+
+    kl_loss = .5 * \
+        tf.reduce_sum(tf.exp(logvar) + tf.square(mu) - 1. - logvar, 1)
+    return latent, kl_loss
+
+
+def conv(name, flow, depth, patch, stride, activation, maxpool=False, dropout=None, initializer=None, padding='VALID'):
+    previous_depth = flow.get_shape().as_list()[-1]
+
+    if type(patch) == int:
+        patch = [patch, patch]
+    else:
+        patch = list(patch)
+
+    if type(stride) == int:
+        stride = [1, stride, stride, 1]
+    else:
+        stride = list(stride)
+        if len(stride) == 2:
+            stride = [1, *stride, 1]
+
+    if initializer is None or initializer.lower() == 'fanin':
+        initializer = fanIn(previous_depth)
+    elif type(initializer) in [int, float]:
+        initializer = tf.random_uniform_initializer(minval=-initializer,
+                                                    maxval=initializer)
+    elif initializer.lower() == 'xavier':
+        initializer = xavier_initializer()
+
+    shape = patch + [previous_depth, depth]
+    w = tf.get_variable("%s_conv_w" % name, shape=shape,
+                        initializer=initializer)
+
+    if maxpool:
+        flow = tf.nn.conv2d(flow, w, strides=[1, 1, 1, 1], padding=padding)
+        flow = tf.max_pool(flow, stride, stride, padding=padding)
+    else:
+        print(w, stride, padding)
+        flow = tf.nn.conv2d(flow, w, strides=stride, padding=padding)
+
+    b = tf.get_variable("%s_conv_b" % name, shape=[depth],
+                        initializer=initializer)
+
+    flow += b
+
+    if activation is not None:
+        flow = activation(flow)
+
+    if dropout is not None:
+        flow = tf.nn.dropout(flow, keep_prob=dropout)
+
+    return flow
+
+
+def deconv(name, flow, shape, patch, stride, initializer=None):
+    input_shape = flow.get_shape().as_list()
+    depth = shape[-1]
+
+    if type(patch) == int:
+        patch = [patch, patch]
+    else:
+        patch = list(patch)
+
+    if type(stride) == int:
+        stride = [1, stride, stride, 1]
+    else:
+        stride = list(stride)
+        if len(stride) == 2:
+            stride = [1, *stride, 1]
+
+    if initializer is None or initializer == 'fanin':
+        initializer = fanIn(input_shape[1:])
+    elif initializer == 'xavier':
+        initializer = xavier_initializer()
+    elif type(initializer) in [int, float]:
+        initializer = tf.random_uniform_initializer(minval=-initializer,
+                                                    maxval=initializer)
+
+    weight_shape = patch + [depth, input_shape[-1]]
+    w = tf.get_variable('%s_deconv_w' %
+                        name, weight_shape, initializer=initializer)
+    print(w, stride)
+
+    flow = tf.nn.conv2d_transpose(flow, w, output_shape=shape,
+                                  strides=stride)
+
+    b = tf.get_variable(
+        '%s_deconv_b' % name, [depth], initializer=initializer)
+    flow += b
+
+    return flow
 
 
 def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=True, return_param=False):
@@ -59,7 +179,7 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
         flow = tf.add_n(mults)
 
     else:
-        flow = flatten(flow)
+        flow = flat(flow)
         dimension = flow.get_shape().as_list()[-1]
 
         if initializer is None or initializer == 'fanin':
@@ -70,7 +190,7 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
             initializer = tf.random_uniform_initializer(minval=-initializer,
                                                         maxval=initializer)
 
-        weight = tf.get_variable(name + "_weights",
+        weight = tf.get_variable(name + "_weight",
                                  shape=[dimension, output_dims],
                                  dtype=tf.float32,
                                  initializer=initializer)
@@ -80,7 +200,7 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
         flow = tf.matmul(flow, weight)
 
     if bias:
-        bias = tf.get_variable(name + "_biases",
+        bias = tf.get_variable(name + "_bias",
                                shape=[output_dims],
                                dtype=tf.float32,
                                initializer=initializer)
@@ -119,7 +239,7 @@ class Convolutional(object):
             stride = list(stride)
         self.layers.append((depth, patch_size, stride))
 
-    def __call__(self, flow, dropout= None):
+    def __call__(self, flow, dropout=None):
         self.batch_size = tf.shape(flow)[0]
         previous_depth = flow.get_shape().as_list()[-1]
         for i, (depth, patch_size, stride) in enumerate(self.layers):

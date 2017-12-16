@@ -2,37 +2,94 @@ from collections import deque
 import numpy as np
 
 
-class RunningAverage(object):
-
-    def __init__(self, tau, initial_value=0.):
-        self.tau = tau
-        self.avg = initial_value
-
-    def __call__(self, value=None):
-        if value is not None:
-            self.avg = self.avg * (1 - self.tau) + value * self.tau
-        return self.avg
-
-
 class RunningStats(object):
 
-    def __init__(self, tau, initial_values):
-        pass
-
-
-class RunningStd(object):
-
-    def __init__(self, tau, initial_avg=0., initial_var=0.):
+    def __init__(self, tau=None, *args):
+        if len(args):
+            print("WARNING: Remove extra argumetns when initializing RunningStates.")
         self.tau = tau
-        self.avg = initial_avg
-        self.var = initial_var
+        self._func = self._first
 
-    def __call__(self, value=None):
+    def __call__(self, *args):
+        return self._func(*args)
+
+    def _first(self, value=None, axis=0):
+        self.avg = np.mean(value, axis=0)
+        self.var = np.var(value, axis=0)
+        self.data_count = len(value)
+
+        if self.tau is None:
+            self._func = self._exact
+        else:
+            self._func = self._running
+
+        return self.avg, self.var
+
+    def _exact(self, value=None, axis=0):
         if value is not None:
-            var = np.linalg.norm(value - self.avg)
+            n = len(value)
+
+            new_data_mean = np.mean(value, axis=0)
+
+            temp = value - new_data_mean
+            new_data_var = np.dot(temp, temp) / n
+
+            new_data_mean_sq = np.square(new_data_mean)
+
+            new_means = ((self.avg * self.data_count) +
+                         (new_data_mean * n)) / (self.data_count + n)
+
+            self.var = (((self.data_count * (self.var + np.square(self.avg))) +
+                         (n * (new_data_var + new_data_mean_sq))) / (self.data_count + n) -
+                        np.square(new_means))
+
+            # occasionally goes negative, clip
+            self.var = np.maximum(0.0, self.var)
+            self.avg = new_means
+        return self.avg, self.var
+
+    def _running(self, value=None, axis=0):
+        if value is not None:
+            var = np.var(value - self.avg, axis=0)
             self.var = self.var * (1 - self.tau) + var * self.tau
             self.avg = self.avg * (1 - self.tau) + value * self.tau
         return self.avg, self.var
+
+    def normalize(self, values):
+        return (values - self.avg) / (np.sqrt(self.var) + 1e-6)
+
+
+class RunningAverage(RunningStats):
+
+    def _first(self, value=None, axis=0):
+        self.avg = np.mean(value, axis=0)
+        self.data_count = len(value)
+
+        if self.tau is None:
+            print('here')
+            self._func = self._exact
+        else:
+            print('this')
+            self._func = self._running
+
+        return self.avg
+
+    def _exact(self, value=None, axis=0):
+        if value is not None:
+            n = len(value)
+
+            new_data_mean = np.mean(value, axis=0)
+
+            new_means = ((self.avg * self.data_count) +
+                         (new_data_mean * n)) / (self.data_count + n)
+
+            self.avg = new_means
+        return self.avg
+
+    def _running(self, value=None, axis=0):
+        if value is not None:
+            self.avg = self.avg * (1 - self.tau) + value * self.tau
+        return self.avg
 
 
 class Normality(object):
@@ -105,8 +162,7 @@ def cosineSimilarity(a, b):
 
 
 if __name__ == "__main__":
-    m = RunningAverage(.01)
-    print(m(1.))
-    print(m())
-    m.value = 1.
-    print(m.value)
+    from time import time
+    m = RunningStats()
+    for _ in range(2):
+        print(m([1, 2]))
