@@ -13,7 +13,7 @@ class Figure(object):
 
     def imshow(self, value, *args, **kwargs):
         self.img_handle = self.ax.imshow(
-            value, origin='lower', cmap='gray', *args, **kwargs)
+            value, *args, **kwargs)
         self.fig.canvas.draw()
         self.imshow = self._udpate_image
 

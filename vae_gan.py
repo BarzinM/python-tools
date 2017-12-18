@@ -3,32 +3,22 @@ from tensorflow.examples.tutorials.mnist import input_data
 from os import environ
 import numpy as np
 
-from networks import fullyConnected, Convolutional, conv, flat, deconv
+from networks import fullyConnected, Convolutional, conv, flat, deconv, lrelu, normalizeBatch
 from tfmisc import getScopeParameters
 from monitor import Figure
 
-environ['CUDA_VISIBLE_DEVICES'] = ''
+# environ['CUDA_VISIBLE_DEVICES'] = ''
 
-batch_size = 64
+batch_size = 128
 train_steps = 600000
-latent_dim = 128
-learning_rate = .0003
+latent_dim = 32
+learning_rate = 0.0002
 
 d_scale = .25
 g_scale = .625
 
 mnist = input_data.read_data_sets('MNIST')
 
-
-# dataset = tf.data.Dataset.from_tensor_slices(
-#     convert_to_tensor(CelebA(path).train_data_list, dtype=tf.string))
-# dataset = dataset.map(lambda filename: tuple(tf.py_func(_read_by_function,
-#                                                         [filename], [tf.double])), num_parallel_calls=16)
-# dataset = dataset.repeat(100)
-# dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
-# iterator = tf.data.Iterator.from_structure(
-#     dataset.output_types, dataset.output_shapes)
-# training_init_op = iterator.make_initializer(dataset)
 
 shape = (None, 28, 28)
 input_data = tf.placeholder(tf.float32, shape)
@@ -37,11 +27,20 @@ flow_size = tf.shape(input_data)[0]
 
 
 def encoder(flow):
-    flow = conv('layer_0', flow, 32, 5, 2, tf.nn.relu, padding='SAME')
-    print(flow.shape)
-    flow = conv('layer_1', flow, 64, 5, 2, tf.nn.relu, padding='SAME')
-    print(flow.shape)
+    flow = conv('layer_0', flow, 32, 5, 2, None)
+    flow = normalizeBatch(flow, True)
+    flow = lrelu(flow)
+
+    flow = conv('layer_1', flow, 64, 5, 2, None)
+    flow = normalizeBatch(flow, True)
+    flow = lrelu(flow)
+
     flow = flat(flow)
+
+    flow = fullyConnected('layer_2', flow, 1024, None)
+    flow = normalizeBatch(flow, True)
+    flow = lrelu(flow)
+
     mean = fullyConnected('mu', flow, latent_dim, None)
     sigma = fullyConnected('sigma', flow, latent_dim, None)
 
@@ -49,95 +48,114 @@ def encoder(flow):
 
 
 def discriminator(flow):
-    flow = conv('layer_0', flow, 32, 5, 2, tf.nn.relu, padding='SAME')
-    flow = conv('layer_1', flow, 64, 5, 2, tf.nn.relu, padding='SAME')
-    # flow = conv('layer_2', flow, 64, 5, 2, tf.nn.relu)
-    # flow = conv('layer_3', flow, 64, 5, 2, None)
-    middle_conv = flow
-    flow = tf.nn.relu(flow)
+    flow = conv('layer_0', flow, 32, 5, 2, None)
+    flow = normalizeBatch(flow, True)
+    flow = lrelu(flow)
+
+    flow = conv('layer_1', flow, 64, 5, 2, None)
+    flow = normalizeBatch(flow, True)
+    flow = lrelu(flow)
+
     flow = flat(flow)
-    flow = fullyConnected('layer_4', flow, 256, tf.nn.relu)
+
+    flow = fullyConnected('layer_2', flow, 1024, None)
+    layer_l = flow
+    flow = normalizeBatch(flow, True)
+    flow = lrelu(flow)
+    flow = tf.nn.dropout(flow, .5)
+
     flow = fullyConnected('output', flow, 1, None)
 
-    return middle_conv, flow
+    return flow, layer_l
 
 
 def generator(flow):
-    flow = fullyConnected('layer_0', flow, 7 * 7 * 64, tf.nn.relu)
+    flow = fullyConnected('layer_0', flow, 1024, None)
+    flow = normalizeBatch(flow, True)
+    flow = lrelu(flow)
+    flow = fullyConnected('layer_1', flow, 7 * 7 * 64, None)
+    flow = normalizeBatch(flow, True)
+    flow = lrelu(flow)
     flow = tf.reshape(flow, [batch_size, 7, 7, 64])
-    flow = tf.nn.relu(deconv('layer_1', flow, [batch_size, 14, 14, 32], 5, 2))
-    print('gen', flow.shape)
-    flow = tf.nn.relu(deconv('layer_2', flow, [batch_size, 28, 28, 32], 5, 2))
-    print('gen', flow.shape)
-    flow = deconv('output', flow, [batch_size, 28, 28, 1], 5, 1)
-    print(flow.shape)
-    return tf.nn.sigmoid(flow)
+    flow = deconv('layer_2', flow, [batch_size, 14, 14, 32], 5, 2)
+    flow = normalizeBatch(flow, True)
+    flow = lrelu(flow)
+    flow = tf.nn.sigmoid(
+        deconv('layer_3', flow, [batch_size, 28, 28, 1], 5, 2))
+    return flow
 
 
 shaped_input = tf.reshape(input_data, (batch_size, 28, 28, 1))
 
+
 with tf.variable_scope('encoder'):
     mean, sigma = encoder(shaped_input)
+    normal_sample = tf.random_normal(shape=(flow_size, latent_dim))
+    sampled = mean + tf.multiply(tf.exp(.5 * sigma), normal_sample)
 
-normal_sample = tf.random_normal(shape=(flow_size, latent_dim))
-zp = tf.random_normal(shape=(flow_size, latent_dim))
-
-z = mean + tf.multiply(tf.exp(.5 * sigma), normal_sample)
 
 with tf.variable_scope('generator'):
-    constructed = generator(z)
+    constructed = generator(sampled)
 
-with tf.variable_scope('discriminator'):
-    l_x_tilda, de_pro_tilde = discriminator(constructed)
+# Optional
+# with tf.variable_scope('encoder', reuse=True):
+#     recoded, _ = encoder(constructed)
 
 with tf.variable_scope('generator', reuse=True):
-    x_p = generator(zp)
-    print('this', x_p.shape)
+    random_from_normal = tf.random_normal(shape=(flow_size, latent_dim))
+    randomly_generated = generator(random_from_normal)
+
+
+with tf.variable_scope('discriminator'):
+    should_be_ones, l_dataset = discriminator(shaped_input)
 
 with tf.variable_scope('discriminator', reuse=True):
-    lx, de_pro_logits = discriminator(shaped_input)
-    _, g_pro_logits = discriminator(x_p)
+    should_be_zeros, l_constructed = discriminator(constructed)
 
-kl_loss = -0.5 * tf.reduce_sum(1 + sigma - tf.square(mean) - tf.exp(sigma))
+with tf.variable_scope('discriminator', reuse=True):
+    from_normal, l_normal = discriminator(randomly_generated)
+
+priori_loss = -0.5 * tf.reduce_sum(1 + sigma -
+                                   tf.square(mean) - tf.exp(sigma), 1) / latent_dim
+priori_loss = tf.reduce_mean(priori_loss)
 
 # disc loss
-d_fake_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-    labels=tf.zeros_like(g_pro_logits), logits=g_pro_logits)
-d_fake_loss = tf.reduce_mean(d_fake_loss)
 d_real_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-    labels=tf.ones_like(de_pro_logits) - d_scale, logits=de_pro_logits)
+    labels=tf.ones_like(should_be_ones), logits=should_be_ones)
 d_real_loss = tf.reduce_mean(d_real_loss)
-d_tilda_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-    labels=tf.zeros_like(de_pro_tilde), logits=de_pro_tilde)
-d_tilda_loss = tf.reduce_mean(d_tilda_loss)
+d_fake_loss = tf.nn.sigmoid_cross_entropy_with_logits(
+    labels=tf.zeros_like(should_be_zeros), logits=should_be_zeros)
+d_fake_loss = tf.reduce_mean(d_fake_loss)
+d_random_loss = tf.nn.sigmoid_cross_entropy_with_logits(
+    labels=tf.zeros_like(from_normal), logits=from_normal)
+d_random_loss = tf.reduce_mean(d_random_loss)
 
-d_loss = d_fake_loss + d_real_loss + d_tilda_loss
+d_loss = d_fake_loss + d_real_loss + priori_loss
 
 
 # gen loss
 g_fake_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-    labels=tf.ones_like(g_pro_logits) - g_scale, logits=g_pro_logits)
+    labels=tf.ones_like(should_be_zeros), logits=should_be_zeros)
 g_fake_loss = tf.reduce_mean(g_fake_loss)
-g_tilda_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-    labels=tf.ones_like(de_pro_tilde) - g_scale, logits=de_pro_tilde)
-g_tilda_loss = tf.reduce_mean(g_tilda_loss)
+g_random_loss = tf.nn.sigmoid_cross_entropy_with_logits(
+    labels=tf.ones_like(from_normal), logits=from_normal)
+g_random_loss = tf.reduce_mean(g_random_loss)
 
-ll_loss = .5 * tf.square(l_x_tilda - lx) + -.5 * tf.log(2 * 3.1415)
-ll_loss = tf.reduce_mean(ll_loss)
+layer_l_loss = tf.reduce_mean(tf.square(l_constructed - l_dataset))
 
-g_loss = g_fake_loss  # + g_tilda_loss - 1e-6 * ll_loss
+e_loss = priori_loss + layer_l_loss
 
-# encode loss
-encode_loss = tf.reduce_mean(
-    kl_loss) / (batch_size * 784) - ll_loss  # TODO div(kl_loss, #)
+# recoding_loss = tf.reduce_mean(tf.square(recoded) - sampled)
+
+
+g_loss = layer_l_loss + (g_fake_loss + g_random_loss)  # + recoding_loss
+
 
 disc_vars = getScopeParameters('discriminator')
 gen_vars = getScopeParameters('generator')
 encoder_vars = getScopeParameters('encoder')
 
 global_step = tf.train.get_or_create_global_step()
-learning_rate = tf.train.exponential_decay(
-    learning_rate, global_step, decay_steps=10000, decay_rate=.98)
 
 optimizer = tf.train.AdamOptimizer(learning_rate)
 disc_train = optimizer.minimize(d_loss, var_list=disc_vars)
@@ -145,27 +163,32 @@ disc_train = optimizer.minimize(d_loss, var_list=disc_vars)
 optimizer = tf.train.AdamOptimizer(learning_rate)
 gen_train = optimizer.minimize(g_loss, var_list=gen_vars)
 
-optimizer = tf.train.AdamOptimizer(learning_rate*0)
-enc_train = optimizer.minimize(encode_loss, var_list=encoder_vars)
+optimizer = tf.train.AdamOptimizer(learning_rate * 0)
+enc_train = optimizer.minimize(e_loss, var_list=encoder_vars)
 
 init = tf.global_variables_initializer()
 
 fig = Figure()
 
+small_steps = 100
 with tf.Session() as sess:
     sess.run(init)
 
     for step in range(10000):
-        batch = mnist.train.next_batch(batch_size)[0]
-        batch = np.reshape(batch, (-1, 28, 28))
-        *losses, cons = sess.run([disc_train,
-                                  gen_train,
-                                  enc_train,
-                                  d_loss,
-                                  g_loss,
-                                  encode_loss,
-                                  constructed], {input_data: batch})[3:]
 
-        print("G: %7.3f | D: %7.3f | E: %7.3f" % (*losses,))
+        losses = np.zeros((3))
+        for _ in range(small_steps):
+            batch = mnist.train.next_batch(batch_size)[0]
+            batch = np.reshape(batch, (-1, 28, 28))
+            *l, cons = sess.run([enc_train,
+                                 disc_train,
+                                 gen_train,
+                                 e_loss,
+                                 g_loss,
+                                 d_loss,
+                                 constructed], {input_data: batch})[3:]
+            losses += l
+
+        print(step, "E: %7.3f | G: %7.3f | D: %7.3f" % (*(losses / small_steps),))
         fig.imshow(np.concatenate(
-            [batch[0], cons[0, :, :, 0]], axis=-1))
+            [batch[0], cons[0, :, :, 0]], axis=-1), cmap='gray')

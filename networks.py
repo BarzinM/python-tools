@@ -5,13 +5,17 @@ from tensorflow.contrib.layers.python.layers import batch_norm
 import numpy as np
 
 
-def normalizeBatch(x, is_training, name):
+def lrelu(x, alpha=.01, *args, **kwargs):
+    return tf.maximum(x, alpha * x)
+
+
+def normalizeBatch(x, is_training):
     return batch_norm(x, decay=0.9, center=True, scale=True,
                       updates_collections=None,
                       is_training=is_training,
                       reuse=None,
                       trainable=True,
-                      scope=name)
+                      scope=None)
 
 
 def flat(tensor, batch_size=-1):
@@ -146,7 +150,6 @@ def deconv(name, flow, shape, patch, stride, initializer=None):
     weight_shape = patch + [depth, input_shape[-1]]
     w = tf.get_variable('%s_deconv_w' %
                         name, weight_shape, initializer=initializer)
-    print(w, stride)
 
     flow = tf.nn.conv2d_transpose(flow, w, output_shape=shape,
                                   strides=stride)
