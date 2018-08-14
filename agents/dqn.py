@@ -8,6 +8,7 @@ from collections import deque
 
 
 class DQN(object):
+
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
         if type(state_dim) == int:
@@ -54,7 +55,8 @@ class DQN(object):
         self.policy_action = tf.argmax(self.action_value, axis=1)
         self.update_op = copyScopeVars('learner', 'target')
 
-        self.train_op = optimizer.minimize(self._loss, var_list=getScopeParameters('learner'))
+        self.train_op = optimizer.minimize(
+            self._loss, var_list=getScopeParameters('learner'))
 
     def train(self, session, batch=None, discount=.97):
         states, actions, rewards, next_states, terminals = self.memory.sample(
@@ -313,41 +315,58 @@ class ExpDQN2(object):
 
     def __init__(self, state_dim, action_dim, memory_size):
         self.action_dim = action_dim
-        self.state = tf.placeholder(tf.float32, [None, state_dim], "states")
+        self.state_ph = tf.placeholder(tf.float32, [None, state_dim], "states")
         self.action_ph = tf.placeholder(tf.int32, [None], "actions")
-        self.action_value_ph = tf.placeholder(
-            tf.float32, [None], "action_values")
-        self.memory = Memory(
-            memory_size, state_dim, 0, 1, state_dim, -1)
-        self.com_memory = Memory(
-            memory_size, state_dim, 0, 1, state_dim, -1)
+        self.reward_ph = tf.placeholder(tf.float32, [None], "rewards")
+        self.next_state_ph = tf.placeholder(
+            tf.float32, [None, state_dim], "states")
+        self.terminal_ph = tf.placeholder(tf.float32, [None], "terminals")
 
-        self.com_avg = RunningAverage(.001, 1.)
-        self.mem_avg = RunningAverage(.001, 0.)
+        self.memory = Memory(
+            memory_size, (state_dim, float), (0, int), (0, int), (state_dim, float), (0, bool))
+        self.com_memory = Memory(
+            memory_size, (state_dim, float), (0, int), (0, int), (state_dim, float), (0, bool))
+
+        self.com_avg = RunningAverage(.001)
+        self.com_avg(1.)
+        self.mem_avg = RunningAverage(.001)
 
     def initialize(self, layer_dims=[100], optimizer=None):
-        def _make():
-            flow = self.state
+
+        discount = .97
+
+        def _make(flow):
             for i, size in enumerate(layer_dims):
                 flow = fullyConnected(
-                    "layer%i" % i, flow, size, tf.nn.relu, initializer=.003)
+                    "layer%i" % i, flow, size, tf.nn.relu)
 
             return fullyConnected(
-                "output_layer", flow, self.action_dim, initializer=.003)
+                "output_layer", flow, self.action_dim, None)
 
         with tf.variable_scope('learner'):
-            self.action_value = _make()
+            self.action_value = _make(self.state_ph)
         with tf.variable_scope('target'):
-            self.target_action_value = _make()
+            self.target_action_value = _make(self.next_state_ph)
 
         self.update_op = copyScopeVars('learner', 'target')
 
-        row = tf.range(0, tf.shape(self.action_value)[0])
-        indexes = tf.stack([row, self.action_ph], axis=1)
-        action_value = tf.gather_nd(self.action_value, indexes)
+        self.policy_action = tf.argmax(self.action_value, axis=1)
 
-        self.single_loss = tf.square(action_value - self.action_value_ph)
-        self.get_grad = tf.gradients(self.single_loss, self.action_value)[0]
+        self.batch_size = tf.shape(self.action_value)[0]
+        row = tf.range(self.batch_size)
+        indexes = tf.stack([row, self.action_ph], axis=1)
+
+        next_q = tf.reduce_max(self.target_action_value, axis=1)
+        target = self.reward_ph + discount * next_q * (1 - self.terminal_ph)
+        target = tf.stop_gradient(target)
+
+        prediction = tf.gather_nd(self.action_value, indexes)
+        # self.q_loss = tf.losses.huber_loss(target, prediction)
+
+        self.q_loss = tf.square(prediction - target)
+        print('shape', self.q_loss.shape)
+        self.get_grad = tf.gradients(self.q_loss, self.action_value)[0]
+        print(self.get_grad.shape)
         up, down = tf.split(self.get_grad, 2, 0)
         min_grad = tf.reduce_mean(tf.abs(up))
         down = tf.clip_by_value(down, -min_grad, min_grad)
@@ -362,54 +381,54 @@ class ExpDQN2(object):
     def train(self, session, batch=None, discount=.97):
         states, actions, rewards, next_states, terminals = self.memory.sample(
             batch)
-        next_state_value = session.run(
-            self.target_action_value, {self.state: next_states})
-        observed_value = rewards + discount * \
-            np.max(next_state_value, 1, keepdims=True)
-        observed_value[terminals] = rewards[terminals]
 
         try:
             states2, actions2, rewards2, next_states2, terminals2 = self.com_memory.sample(
                 batch)
-            next_state_value2 = session.run(
-                self.target_action_value, {self.state: next_states2})
-            observed_value2 = rewards2 + discount * \
-                np.max(next_state_value2, 1, keepdims=True)
-            observed_value2[terminals2] = rewards2[terminals2]
 
             states = np.concatenate((states, states2), 0)
             actions = np.concatenate((actions, actions2), 0)
-            observed_value = np.concatenate(
-                (observed_value, observed_value2), 0)
+            rewards = np.concatenate((rewards, rewards2), 0)
+            next_states = np.concatenate((next_states, next_states2), 0)
+            terminals = np.concatenate((terminals, terminals2), 0)
         except ValueError:
             pass
 
-        _, sl = session.run([self.train_op, self.single_loss], {
-            self.state: states, self.action_ph: actions, self.action_value_ph: observed_value[:, 0]})
+        dic = {self.state_ph: states,
+               self.action_ph: actions,
+               self.reward_ph: rewards,
+               self.next_state_ph: next_states,
+               self.terminal_ph: terminals}
+        _, sl = session.run([self.train_op, self.q_loss], dic)
 
         if len(sl) > batch:
-            self.com_avg.update(np.max(sl[batch:]))
+            self.com_avg(np.max(sl[batch:]))
         # self.com_avg.update(np.mean(sl))
 
         return np.mean(sl[:batch])
 
     def policy(self, session, state):
-        return session.run(self.action_value, {self.state: [state]})[0]
+        return session.run(self.action_value, {self.state_ph: [state]})[0]
 
     def memorize(self, session, state, action, reward, next_state, terminal):
         # if not self.memory.isFull():
         #     self.memory.add(state, action, reward, next_state, terminal)
         #     return
-        next_state_value = session.run(
-            self.target_action_value, {self.state: [next_state]})
-        observed_value = reward + .97 * \
-            np.max(next_state_value, 1, keepdims=True)
-        if terminal:
-            observed_value[0, 0] = reward / .03
-        l = session.run(self.single_loss, {
-            self.state: state[None, :], self.action_ph: [action], self.action_value_ph: observed_value[:, 0]})[0]
+        # next_state_value = session.run(
+        #     self.target_action_value, {self.state_ph: [next_state]})
+        # observed_value = reward + .97 * \
+        #     np.max(next_state_value, 1, keepdims=True)
+        # if terminal:
+        #     observed_value[0, 0] = reward / .03
+        dic = {self.state_ph: state[None, :],
+               self.action_ph: [action],
+               self.reward_ph: [reward],
+               self.next_state_ph: [next_state],
+               self.terminal_ph: [terminal]}
 
-        if l > self.com_avg.avg:
+        l = session.run(self.q_loss, dic)[0]
+
+        if l > self.com_avg():
             self.com_memory.add(state, action, reward, next_state, terminal)
         else:
             self.memory.add(state, action, reward, next_state, terminal)

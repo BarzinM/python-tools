@@ -62,14 +62,16 @@ class RunningStats(object):
 class RunningAverage(RunningStats):
 
     def _first(self, value=None, axis=0):
-        self.avg = np.mean(value, axis=0)
-        self.data_count = len(value)
+        if type(value) in [int, float]:
+            self.avg = value
+            self.data_count = 1
+        else:
+            self.avg = np.mean(value, axis=0)
+            self.data_count = len(value)
 
         if self.tau is None:
-            print('here')
             self._func = self._exact
         else:
-            print('this')
             self._func = self._running
 
         return self.avg

@@ -129,37 +129,47 @@ class MultiDimObject(Object):
 
 class Simple(object):
 
-    def __init__(self, height, width, obs_length, etype='empty'):
+    def __init__(self, height, width, obs_length, etype='empty', sparsity=300):
         self.height = height
         self.width = width
 
         if etype == 'random':
-            self.area = np.random.randint(10, 60, size=(height, width))
-            self.area[self.area == 10] = 1
-            self.area[self.area > 10] = 0
+            self._area = np.random.randint(
+                10, sparsity + 10, size=(height, width))
+            self._area[self._area == 10] = 1
+            self._area[self._area > 10] = 0
         elif etype == 'empty':
-            self.area = np.zeros((height, width))
+            self._area = np.zeros((height, width))
 
         elif etype == 'obs':
-            self.area = np.Ones(size=(height, width))
+            self._area = np.Ones(size=(height, width))
 
-        self.obs = np.zeros(shape=(1 + 2 * obs_length, 1 + 2 * obs_length))
+        self.area = np.copy(self._area)
+
+        self.obs_dim = 1 + 2 * obs_length
+        self.obs = np.zeros(shape=(self.obs_dim, self.obs_dim))
         self.obs_length = obs_length
 
-        # self.env_plot = Figure()
-        # self.env_plot.imshow(self.area, vmin=0, vmax=5)
-        # self.agent_view = Figure()
-        # self.agent = MultiDimObject(self.pose)
+        self.reset()
+
+        self.env_plot = Figure()
+        self.agent_view = Figure()
+
+        self.agent = MultiDimObject(self.pose)
+
+    def getObsDim(self):
+        return self.obs_dim
 
     def reset(self):
-        self.pose = randomPose(self.height, self.width)# * 0 + 10
+        self.pose = randomPose(self.height, self.width)  # * 0 + 10
 
-        self.target = randomPose(self.height, self.width)# * 0 + [25, 25]
+        self.target = randomPose(self.height, self.width)  # * 0 + [25, 25]
         # space = 5
         # while self._check_around(self.target, space):
         #     self.target = randomPose(self.height, self.width)
 
-        self.area[self.target[0], self.target[1]] = 4
+        self.area[:, :] = self._area
+        # self.area[self.target[0], self.target[1]] = 4
 
         self.terminal = False
 
@@ -196,11 +206,13 @@ class Simple(object):
         return self.obs
 
     def plot(self):
-        self.env_plot.imshow(self.area, vmin=0, vmax=5)
+        self.env_plot.imshow(self.area, vmin=0, vmax=5, cmap='gray')
         self.env_plot.plot(self.pose[1], self.pose[0], 'o')  # pose[1] -> x
+        self.env_plot.show()
 
     def plotObservation(self):
-        self.agent_view.imshow(self.obs, vmin=0, vmax=4)
+        self.agent_view.imshow(self.obs, vmin=0, vmax=5, cmap='gray')
+        self.agent_view.show()
 
     def step(self, up, right):
         self.pose[:] = self.agent.force((up, right))
@@ -211,13 +223,27 @@ class Simple(object):
 
     def _crashed(self):
         y, x = round(self.pose[0]), round(self.pose[1])
-        # or self.area[y, x] > 0
-        return self.height <= y or y < 0 or self.width <= x or x < 0
+        out_of_bound = self.height <= y or y < 0 or self.width <= x or x < 0
+        return (out_of_bound or (self.area[y, x] == 1))
 
 
 class Discrete(Simple):
+    """
+    Navigation environment having a discrete motion model without momentum and 
+    accelerations. Inherets from `Simple` parent class.
+
+    """
 
     def step(self, action):
+        """
+        Performs given action for one step in the environment.
+
+        Args:
+            action: A value of type int from the [0-3] space.
+
+        Raises:
+            ValueError: if action has a value out of [0-3] space.
+        """
         if action == 0:
             self.pose[0] += 1
         elif action == 1:
@@ -227,7 +253,7 @@ class Discrete(Simple):
         elif action == 3:
             self.pose[1] -= 1
         else:
-            raise ValeError("Undefined action %i" % action)
+            raise ValueError("Undefined action %i" % action)
         self.terminal = self._crashed()
 
 

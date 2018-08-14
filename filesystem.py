@@ -17,7 +17,7 @@ class FileReport(object):
         self.handle.write(text.format(*args))
 
     def close(self):
-        close(self.handle)
+        self.handle.close()
 
 
 def tailNumber(text):
@@ -89,6 +89,7 @@ def ls(dir, extention='*.*'):
 
 
 class Arguments(object):
+
     def __init__(self):
         self.flags = {}
         self.options = {}

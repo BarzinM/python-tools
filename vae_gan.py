@@ -3,19 +3,16 @@ from tensorflow.examples.tutorials.mnist import input_data
 from os import environ
 import numpy as np
 
-from networks import fullyConnected, Convolutional, conv, flat, deconv, lrelu, normalizeBatch
+from networks import fullyConnected, Convolutional, conv, flat, deconv, normalizeBatch, lrelu
 from tfmisc import getScopeParameters
 from monitor import Figure
 
-# environ['CUDA_VISIBLE_DEVICES'] = ''
+environ['CUDA_VISIBLE_DEVICES'] = ''
 
 batch_size = 128
 train_steps = 600000
 latent_dim = 32
 learning_rate = 0.0002
-
-d_scale = .25
-g_scale = .625
 
 mnist = input_data.read_data_sets('MNIST')
 
@@ -62,7 +59,7 @@ def discriminator(flow):
     layer_l = flow
     flow = normalizeBatch(flow, True)
     flow = lrelu(flow)
-    flow = tf.nn.dropout(flow, .5)
+    # flow = tf.nn.dropout(flow, .5)
 
     flow = fullyConnected('output', flow, 1, None)
 
@@ -147,7 +144,6 @@ e_loss = priori_loss + layer_l_loss
 
 # recoding_loss = tf.reduce_mean(tf.square(recoded) - sampled)
 
-
 g_loss = layer_l_loss + (g_fake_loss + g_random_loss)  # + recoding_loss
 
 
@@ -174,7 +170,7 @@ small_steps = 100
 with tf.Session() as sess:
     sess.run(init)
 
-    for step in range(10000):
+    for step in range(train_steps):
 
         losses = np.zeros((3))
         for _ in range(small_steps):

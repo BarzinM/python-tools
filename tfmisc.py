@@ -83,9 +83,16 @@ def getScopeParameters(scope_name):
 
 
 def copyScopeVars(from_scope, to_scope, tau=None):
-
     from_list = getScopeParameters(from_scope)
     target_list = getScopeParameters(to_scope)
+
+    if tf.get_variable_scope().name:
+        scope = tf.get_variable_scope().name + '/'
+    else:
+        scope = ''
+
+    from_scope = scope + from_scope
+    to_scope = scope + to_scope
 
     from_list = sorted(from_list, key=lambda v: v.name)
     target_list = sorted(target_list, key=lambda v: v.name)
@@ -98,7 +105,8 @@ def copyScopeVars(from_scope, to_scope, tau=None):
     operations = []
     for i in range(len(from_list)):
         assert target_list[i].name[len(
-            to_scope):] == from_list[i].name[len(from_scope):]
+            to_scope):] == from_list[i].name[len(from_scope):], "Incopatible names %s and %s" % (target_list[i].name[len(
+                to_scope):], from_list[i].name[len(from_scope):])
         if tau is not None:
             new_value = tf.multiply(
                 from_list[i], tau) + tf.multiply(target_list[i], (1 - tau))

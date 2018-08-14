@@ -8,27 +8,39 @@ class Figure(object):
 
     def __init__(self):
         plt.ion()
-        self.fig, self.ax = plt.subplots(1, 1)
-        # self.handle = None
+        self.fig = None
+        self.xlim = None
+        self.ylim = None
+
+    def make(self, xlim=None, ylim=None, figsize=None, equal=True):
+        self.fig, self.ax = plt.subplots(1, 1, figsize=figsize)
+        if xlim is not None:
+            self.ax.set_xlim(xlim)
+        if ylim is not None:
+            self.ax.set_ylim(ylim)
+        if equal:
+            plt.gca().set_aspect('equal', adjustable='box')
 
     def imshow(self, value, *args, **kwargs):
+        if self.fig is None:
+            self.make()
+
         self.img_handle = self.ax.imshow(
             value, *args, **kwargs)
-        self.fig.canvas.draw()
+
         self.imshow = self._udpate_image
 
     def _udpate_image(self, value, *args, **kwargs):
         self.img_handle.set_data(value)
-        self.fig.canvas.draw()
 
     def plot(self, x, y, *args, **kwargs):
+        if self.fig is None:
+            self.fig, self.ax = plt.subplots(1, 1)
         self.plot_handle = self.ax.plot(x, y, *args, **kwargs)[0]
-        self.fig.canvas.draw()
         self.plot = self._update_plot
 
     def _update_plot(self, x, y, *args, **kwargs):
         self.plot_handle.set_data(x, y)
-        self.fig.canvas.draw()
 
     def setLimit(self, y_limits=None, x_limits=None):
         if x_limits is not None:
@@ -37,6 +49,9 @@ class Figure(object):
         if y_limits is not None:
             assert len(y_limits) == 2
             self.ax.set_ylim(y_limits)
+
+    def show(self):
+        self.fig.canvas.draw()
 
 
 class Tensorboard(object):
@@ -156,6 +171,7 @@ def cleanLine(text):
 
 def boxPrint(text, wrap=0):
     line_style = '-'
+    text = str(text)
     paragraph = text.split('\n')
     if wrap > 0:
         index = 0

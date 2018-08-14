@@ -1,8 +1,7 @@
+import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.layers import xavier_initializer
 from tensorflow.contrib.layers.python.layers import batch_norm
-
-import numpy as np
 
 
 def lrelu(x, alpha=.01, *args, **kwargs):
@@ -62,6 +61,30 @@ class VAE(object):
         return latent
 
 
+class MixtureDensityNetworks(object):
+
+    def __init__(self, dimension):
+        self.dimension = dimension
+
+    def __call__(self, flow):
+        self.mu = fullyConnected("mu", flow, self.dimension, None)
+        self.var = fullyConnected("var", flow, self.dimension, None)
+        self.var = tf.exp(self.var)
+        self.weight = fullyConnected(
+            "alpha", flow, self.dimension, tf.nn.softmax)
+        normal = tf.distribution.normal()
+        output = (self.mu + self.var * normal) * self.weight
+        return output
+
+    def loss(self, y):
+        self._loss = -.5 * tf.square((self.mu - y) / self.var)
+        # coef (1/sqrt(...)) below is not needed
+        self._loss = (tf.exp(self._loss) / self.var)  # * (1/sqrt(2*pi))
+        self._loss = self._loss * self.weight
+        self._loss = -tf.log(tf.reduce_sum(self._loss, 1))
+        return self._loss
+
+
 def latent(flow, dimension):
     mu = fullyConnected("mu", flow, dimension, None)
     logvar = fullyConnected("logvar", flow, dimension, None)
@@ -75,7 +98,18 @@ def latent(flow, dimension):
     return latent, kl_loss
 
 
-def conv(name, flow, depth, patch, stride, activation, maxpool=False, dropout=None, initializer=None, padding='VALID'):
+def _getInitializer(initializer, dimension=None):
+    if initializer is None or initializer.lower() == 'fanin':
+        initializer = fanIn(dimension)
+    elif initializer.lower() == 'xavier':
+        initializer = xavier_initializer()
+    elif type(initializer) in [int, float]:
+        initializer = tf.random_uniform_initializer(minval=-initializer,
+                                                    maxval=initializer)
+    return initializer
+
+
+def conv(name, flow, depth, patch, stride, activation=None, maxpool=False, dropout=None, initializer=None, padding='VALID'):
     previous_depth = flow.get_shape().as_list()[-1]
 
     if type(patch) == int:
@@ -90,13 +124,7 @@ def conv(name, flow, depth, patch, stride, activation, maxpool=False, dropout=No
         if len(stride) == 2:
             stride = [1, *stride, 1]
 
-    if initializer is None or initializer.lower() == 'fanin':
-        initializer = fanIn(previous_depth)
-    elif type(initializer) in [int, float]:
-        initializer = tf.random_uniform_initializer(minval=-initializer,
-                                                    maxval=initializer)
-    elif initializer.lower() == 'xavier':
-        initializer = xavier_initializer()
+    initializer = _getInitializer(initializer, previous_depth)
 
     shape = patch + [previous_depth, depth]
     w = tf.get_variable("%s_conv_w" % name, shape=shape,
@@ -106,7 +134,6 @@ def conv(name, flow, depth, patch, stride, activation, maxpool=False, dropout=No
         flow = tf.nn.conv2d(flow, w, strides=[1, 1, 1, 1], padding=padding)
         flow = tf.max_pool(flow, stride, stride, padding=padding)
     else:
-        print(w, stride, padding)
         flow = tf.nn.conv2d(flow, w, strides=stride, padding=padding)
 
     b = tf.get_variable("%s_conv_b" % name, shape=[depth],
@@ -116,6 +143,7 @@ def conv(name, flow, depth, patch, stride, activation, maxpool=False, dropout=No
 
     if activation is not None:
         flow = activation(flow)
+        # raise ValueError("Activation argument is deprecated!")
 
     if dropout is not None:
         flow = tf.nn.dropout(flow, keep_prob=dropout)
@@ -139,13 +167,8 @@ def deconv(name, flow, shape, patch, stride, initializer=None):
         if len(stride) == 2:
             stride = [1, *stride, 1]
 
-    if initializer is None or initializer == 'fanin':
-        initializer = fanIn(input_shape[1:])
-    elif initializer == 'xavier':
-        initializer = xavier_initializer()
-    elif type(initializer) in [int, float]:
-        initializer = tf.random_uniform_initializer(minval=-initializer,
-                                                    maxval=initializer)
+    dimension = input_shape[1:]
+    initializer = _getInitializer(initializer, dimension)
 
     weight_shape = patch + [depth, input_shape[-1]]
     w = tf.get_variable('%s_deconv_w' %
@@ -161,8 +184,10 @@ def deconv(name, flow, shape, patch, stride, initializer=None):
     return flow
 
 
-def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=True, return_param=False):
+def fullyConnected(name, flow, output_dims, activation=None, initializer=None, bias=True, return_param=False):
     assert type(name) == str
+    if len(name):
+        name = name + '_'
     if type(output_dims) not in [int, np.int16, np.int32, np.int64]:
         raise TypeError("The argument `output_dims` should be type `int`. "
                         "The provided value %s is type %s" % (str(output_dims), type(output_dims)))
@@ -172,7 +197,7 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
 
     if type(flow) in [list, tuple]:
         print("FULLY CONNECTING A LIST")
-        mults = [fullyConnected(name='%s_%i' % (name, i),
+        mults = [fullyConnected(name='%s%i' % (name, i),
                                 flow=tensor,
                                 output_dims=output_dims,
                                 activation=None,
@@ -184,26 +209,19 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
     else:
         flow = flat(flow)
         dimension = flow.get_shape().as_list()[-1]
+        initializer = _getInitializer(initializer, dimension)
 
-        if initializer is None or initializer == 'fanin':
-            initializer = fanIn(dimension)
-        elif initializer == 'xavier':
-            initializer = xavier_initializer()
-        elif type(initializer) in [int, float]:
-            initializer = tf.random_uniform_initializer(minval=-initializer,
-                                                        maxval=initializer)
-
-        weight = tf.get_variable(name + "_weight",
+        weight = tf.get_variable(name + "weight",
                                  shape=[dimension, output_dims],
                                  dtype=tf.float32,
                                  initializer=initializer)
         parameters.append(weight)
         print("Fully connected weight:", name +
-              "_w", weight.get_shape().as_list())
+              "w", weight.get_shape().as_list())
         flow = tf.matmul(flow, weight)
 
     if bias:
-        bias = tf.get_variable(name + "_bias",
+        bias = tf.get_variable(name + "bias",
                                shape=[output_dims],
                                dtype=tf.float32,
                                initializer=initializer)
@@ -211,7 +229,8 @@ def fullyConnected(name, flow, output_dims, activation, initializer=None, bias=T
         flow += bias
 
     if activation is not None:
-        flow = activation(flow, name=name + "_activated")
+        # raise ValueError("Activation argument is deprecated!")
+        flow = activation(flow, name=name + "activated")
 
     if return_param:
         parameters = [flow] + parameters
@@ -271,6 +290,7 @@ class Convolutional(object):
             else:
                 flow = tf.nn.conv2d(flow, w, strides=stride,
                                     padding=self.padding)
+            print(flow.get_shape().as_list())
 
             flow = tf.nn.relu(flow + b)
 
@@ -487,16 +507,8 @@ class ContinuousPolicy(object):
 class BaseNetwork(object):
 
     def __init__(self):
-        # self.drop = tf.placeholder(tf.float32, name="dropout")
-        # self.normalize = tf.placeholder(tf.bool, name="normalize")
         self.global_step = tf.train.get_or_create_global_step()
-        # learning_rate = LEARNING_RATE
-        # self.learning_rate = tf.train.exponential_decay(
-        #     LEARNING_RATE, self.global_step, DECAY_STEP, LEARNING_DECAY)
-
-    def initSaver(self):
-        # self.save_ready = True
-        self.saver = tf.train.Saver(max_to_keep=40)
+        self.saver = None
 
     def initHistogram(self, size, numbers):
         self.counter = 0
@@ -509,10 +521,17 @@ class BaseNetwork(object):
     def saveHistogram(self, path):
         np.save(path, self.histo)
 
-    def saveModel(self, session, path, step=0):
+    def saveModel(self, session, path, step=None):
+        if self.saver is None:
+            self.saver = tf.train.Saver(max_to_keep=5)
+        if step is None:
+            step = self.train_count
         path = self.saver.save(
-            session, path, global_step=step or self.global_step)
+            session, path, global_step=step)
         print("Saved model to", path)
 
     def restoreModel(self, session, path):
+        if self.saver is None:
+            self.saver = tf.train.Saver(max_to_keep=5)
+
         self.saver.restore(session, path)
