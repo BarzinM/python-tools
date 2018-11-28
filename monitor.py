@@ -54,6 +54,7 @@ class Figure(object):
         self.fig.canvas.draw()
 
 
+
 class Tensorboard(object):
 
     def __init__(self, path=None, sub='', session=None, verbose=True):

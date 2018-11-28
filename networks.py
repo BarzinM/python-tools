@@ -239,6 +239,40 @@ def fullyConnected(name, flow, output_dims, activation=None, initializer=None, b
         return flow
 
 
+def convolution(name, flow, depth, patch_size, stride, max_pool=False, padding='VALID'):
+    batch_size, height, width, previous_depth = flow.get_shape().as_list()
+
+    if type(patch_size) == int:
+        patch_size = [min(height, patch_size), min(width, patch_size)]
+    else:
+        patch_size = list(patch_size)
+    if type(stride) == int:
+        stride = [stride if stride < height else 1,
+                  stride if stride < width else 1]
+    else:
+        stride = list(stride)
+
+    shape = patch_size + [previous_depth, depth]
+    w = tf.get_variable("%s_w" % name,
+                        shape=shape,
+                        initializer=fanIn(shape))
+    b = tf.get_variable("%s_b" % name,
+                        shape=[depth],
+                        initializer=fanIn(shape))
+
+    if max_pool:
+        flow = tf.nn.conv2d(
+            flow, w, strides=[1, 1, 1, 1], padding=padding)
+        flow = tf.nn.max_pool(
+            flow, stride, stride, padding=padding)
+    else:
+        flow = tf.nn.conv2d(flow, w, strides=stride,
+                            padding=padding)
+    flow = flow + b
+
+    return flow
+
+
 class Convolutional(object):
 
     def __init__(self, max_pool=False):

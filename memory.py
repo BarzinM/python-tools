@@ -1,8 +1,8 @@
+from typing import Union, List, Optional, Tuple
 import os
 import numpy as np
 from collections import deque
 from data_structures import SumTree
-from time import time
 
 
 class Buffer(object):
@@ -88,7 +88,7 @@ class Memory(object):
 
         dictionary = {'%i' % i: self.memory[i]
                       for i in range(len(self.memory))}
-        start = time()
+        # start = time()
         np.savez(path, **dictionary)
 
     def trim(self):
@@ -138,7 +138,17 @@ class Memory(object):
         # self.added += 1
         i = self.pointer
         for b, m in enumerate(inputs):
-            self.memory[b][i] = m
+            try:
+                self.memory[b][i] = m
+            except IndexError:
+                if b >= len(self.memory):
+                    print("Too many Arguments! Did not have room for the following:")
+                    print(m)
+                # else:
+                print("Error in adding sample %i, item %i" % (i, b))
+                print("Object has %i data types." % len(self.memory))
+                print("Object's item shape is:", self.memory[0].shape)
+                raise
         self.pointer = (i + 1) % self.max_length
 
     def _switch(self):
@@ -171,9 +181,9 @@ class Memory(object):
     def getBatchIndex(self):
         return self.index
 
-    def next(self):
+    def next(self, d=1):
         # maybe should use the method instead
-        self.index = (self.index + 1) % self.length
+        self.index = (self.index + d) % self.length
         return [m[self.index] for m in self.memory]
 
     def sample(self, batch_size=None):
@@ -190,7 +200,7 @@ class Memory(object):
 
     def __str__(self):
         size = self.__len__()
-        return '\n'.join([str(m[:size]) for m in self.memory])
+        return '\n'.join([str(m[:size]).strip("\t") for m in self.memory])
 
     def nbytes(self, unit='b'):
         unit = unit.lower()
@@ -228,89 +238,99 @@ class SequencialMemory(Memory):
 
 
 class ContinuousMemory(Memory):
+    """
+    Makes a buffer to store sequences of connected data. Eacch sample can
+    contain multiple items with different dimensions and types. 
 
-    def __init__(self, memory_size, state_structure, action_structure,
-                 reward_type=np.float32):
-        if type(state_structure[0]) == int:
-            super().__init__(
-                memory_size,
-                (0, np.int32),
-                state_structure,
-                action_structure,
-                (0, reward_type),
-                (0, np.bool),
-            )
-            self.arg_count = 4  # TODO: support nested state structure
-            self.sample = self._single_sample
-        elif type(state_structure[0]) in [list, tuple]:
-            s = [(dim, t) for dim, t in state_structure]
-            super().__init__(
-                memory_size,
-                (0, np.int32),
-                *s,
-                action_structure,
-                (0, reward_type),
-                (0, np.bool),
-            )
-            self.arg_count = 3 + len(s)
-            self.state_len = len(s)
-            self.sample = self._multi_sample
+    Attributes:
+        size: the maximum number of samples that the buffer can hold. Adding
+            more samples will overwrite the oldest samples.
+        *shape_type_tuples: tuples of (shape, type) the describe each item of
+            samples.
+    """
 
+    def __init__(self, size: int,
+                 *shape_type: List[Tuple[Union[int, List[int]], object]]):
+
+        super().__init__(size, (0, np.int), *shape_type)
+        self.arg_count = len(shape_type)
         self.exp_counter = 0
 
+    def add(self, *args: List[Union[float, np.array]]):
+        """
+        Adds a new sample set to the memory. If the function is called with a 
+        less arguments than the structure of the memory, it will put a break
+        after this added sample and next one.
+        Args:
+        *args: Multiple items that belong to one sample.
+        """
+        pass
+
     def _fill(self, *inputs):
-        if len(inputs) < self.arg_count:
-            self.cut()
         i = self.pointer
         for b, m in enumerate([self.exp_counter, *inputs]):
             self.memory[b][i] = m
+
         self.pointer = (i + 1)
         self.length = (i + 1)
         if (i + 1) == self.max_length:
             self._switch()
-        # self.added += 1
-        self.exp_counter += 1
 
-    def _update(self, *inputs):
+        self.exp_counter += 1
         if len(inputs) < self.arg_count:
             self.cut()
-        # self.added += 1
+
+    def _update(self, *inputs):
         i = self.pointer
         for b, m in enumerate([self.exp_counter, *inputs]):
-            self.memory[b][i] = m
+            try:
+                self.memory[b][i] = m
+            except IndexError:
+                if b >= len(self.memory):
+                    print("Too many Arguments! Did not have room for the following:")
+                    print(m)
+                # else:
+                print("Error in adding sample %i, item %i" % (i, b))
+                print("Object has %i data types." % len(self.memory))
+                print("Object's item shape is:", self.memory[0].shape)
+                raise
         self.pointer = (i + 1) % self.max_length
+
         self.exp_counter += 1
+        if len(inputs) < self.arg_count:
+            self.cut()
 
     def cut(self):
+        """
+        When called, makes a disconnect between previous sample and next sample.
+        """
         self.exp_counter += 1
 
-    def _single_sample(self, batch_size, length=1):
+    def sample(self, batch_size: int, length: int = 1) -> List[np.array]:
+        """
+        Samples from the memory.
+
+        Args:
+            batch_size: is the maximum number of samples to be returned. For 
+                computational reasons, it is not guranteed that this function 
+                return the exact number of batch_size.
+            length: the length of sequence of each sample.
+
+        Returns:
+            A list of numpy arrays. The length os the list is equal to the 
+                number of memory structure items. The shape of each numpy array
+                is: 
+                [(length + 1), item_dim_1, item_dim_2, ...] 
+        """
         exps = [super().sample(batch_size)]
         exps += [self.next() for _ in range(length)]
         seq = exps[-1][0] - exps[0][0] == length
-        # print(exps)
+        data = []
+        for i in range(1, self.arg_count + 1):
+            data_class = [e[i][seq] for e in exps]
+            data.append(data_class)
 
-        state = [e[1][seq] for e in exps]
-        action = exps[-1][-3][seq]
-        reward = exps[-1][-2][seq]
-        terminal = exps[-1][-1][seq]
-
-        return state, action, reward, terminal
-
-    def _multi_sample(self, batch_size, length=1):
-        exps = [super().sample(batch_size)]
-        exps += [self.next() for _ in range(length)]
-        seq = exps[-1][0] - exps[0][0] == length
-        # print(exps)
-
-        states = []
-        for _ in range(self.state_len):
-            states.append(([e[1 + _][seq] for e in exps]))
-        action = exps[-1][-3][seq]
-        reward = exps[-1][-2][seq]
-        terminal = exps[-1][-1][seq]
-
-        return states, action, reward, terminal
+        return data
 
 
 class EpisodicMemory(object):
@@ -443,6 +463,7 @@ class PrioritizedExperienceReplay2(Memory):
 
 if __name__ == "__main__":
     import numpy as np
+    from time import time
 
     def healthy_copy():
         m = Memory(5, (1, np.int32))
@@ -476,7 +497,7 @@ if __name__ == "__main__":
         b = np.all([m.memory[1][1][i] == 2 for i in range(3)])
         return a and b
 
-    def storeLoad():
+    def store_load():
         m = Memory(60, (0, np.int32), (3, np.int32))
         m.add(0, (1, 2, 3))
         m.add(4, (5, 6, 7))
@@ -489,7 +510,6 @@ if __name__ == "__main__":
         print(m)
 
     def timeit():
-        from time import time
         start = time()
         m = Memory(10000, ((640, 480), np.int8), (720, np.float32))
         t = time() - start
@@ -499,12 +519,14 @@ if __name__ == "__main__":
     assert healthy_get_batch_index()
     assert set_item()
     assert setter()
-    storeLoad()
+    store_load()
     timeit()
 
     m = ContinuousMemory(10, (2, np.int8), (0, np.float))
     m.add([3, 4])
-    m.add([2, 3], 3, 1, False)
-    m.add([4, 5], 1, 1, True)
+    m.add([2, 3], 3)
+    m.add([4, 5], 1)
+    m.add()
+    m.add()
     print(m)
-    print(m.sample(5))
+    # print(m.sample(3))
